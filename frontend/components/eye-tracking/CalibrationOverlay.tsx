@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   ADAPTATION_TARGETS,
   buildCalibrationModel,
+  diagnoseCalibrationSamples,
   CALIBRATION_TARGETS,
   createCalibrationSample,
   LOW_QUALITY_ERROR_SQUARES,
@@ -33,6 +34,15 @@ const SAMPLE_MS = 550
  * long enough to clear that. The extra time is not wasted — it is all sampling.
  */
 const ADAPT_SAMPLE_MS = 950
+/** Window over which the live "is the tracker output moving?" spread is measured. */
+const SIGNAL_WINDOW_MS = 2500
+/**
+ * Below this much movement over that window the tracker is effectively pinned.
+ * Real gaze wanders tens of pixels even during a deliberate fixation — micro-
+ * saccades alone cover more than this — so single-digit spread means the
+ * estimator is not responding to the eyes at all.
+ */
+const PINNED_SPREAD_PX = 6
 const SAMPLE_EVERY_MS = 45
 const MIN_SAMPLES_PER_TARGET = 6
 /** A click still collects for this long, so a target is never fitted to one frame. */
@@ -105,6 +115,8 @@ export default function CalibrationOverlay({
   const [layoutTick, setLayoutTick] = useState(0)
   /** True once at least one usable gaze point has been read from the tracker. */
   const [hasSignal, setHasSignal] = useState(false)
+  /** Mean px the raw estimate has wandered recently; null until enough samples. */
+  const [signalSpread, setSignalSpread] = useState<number | null>(null)
   /** The rejected model, kept so "use it anyway" does not require a redo. */
   const [rejectedModel, setRejectedModel] = useState<CalibrationModel | null>(null)
   /** Set while a target is live: captures it immediately (click / Space). */
@@ -141,12 +153,38 @@ export default function CalibrationOverlay({
   }, [completed, phase, total])
 
   useEffect(() => {
+    /*
+     * Rolling window of recent raw points, so the header can say whether the
+     * tracker's output is actually *moving*.
+     *
+     * "Is a point arriving" and "is that point responding to my eyes" are
+     * different questions, and only the first one was ever asked. A stream
+     * pinned to one spot answers the first question yes, sails through
+     * calibration, and comes out the far side as a confident-looking model with
+     * a stable ~3.4-square error — the number you get when the regression can
+     * only learn "predict the middle of the board". Showing the spread live
+     * turns fifteen wasted seconds into an immediate answer.
+     */
+    const recent: Array<{ x: number; y: number; t: number }> = []
     const id = setInterval(() => {
       invalidateBoardGeometry()
       setLayoutTick((tick) => tick + 1)
-      // Surfaced in the header so a dead tracker reads as "waiting", not "broken".
       const point = rawGazePointRef.current
-      setHasSignal(point.confidence >= 0.35 && Number.isFinite(point.x))
+      const live = point.confidence >= 0.35 && Number.isFinite(point.x)
+      setHasSignal(live)
+
+      const now = performance.now()
+      if (live) recent.push({ x: point.x, y: point.y, t: now })
+      while (recent.length && now - recent[0].t > SIGNAL_WINDOW_MS) recent.shift()
+      if (recent.length >= 5) {
+        const cx = recent.reduce((sum, p) => sum + p.x, 0) / recent.length
+        const cy = recent.reduce((sum, p) => sum + p.y, 0) / recent.length
+        setSignalSpread(
+          recent.reduce((sum, p) => sum + Math.hypot(p.x - cx, p.y - cy), 0) / recent.length,
+        )
+      } else {
+        setSignalSpread(null)
+      }
     }, 200)
     return () => clearInterval(id)
   }, [rawGazePointRef])
@@ -335,6 +373,26 @@ export default function CalibrationOverlay({
       }
 
       const boardRect = rectForCurrentBoard()
+
+      /*
+       * Check the input before trusting the fit. A pinned gaze stream produces a
+       * confident-looking model with a stable ~3.4-square error, which sends the
+       * player off to fix their lighting when the tracker was never producing an
+       * estimate at all. Say what actually happened instead.
+       */
+      const diagnostics = diagnoseCalibrationSamples(fitSamplesRef.current)
+      if (diagnostics.degenerate) {
+        setRejectedModel(null)
+        setPhase('low-quality')
+        setMessage(
+          'The eye tracker is not producing a usable signal — your gaze barely moved ' +
+            'between dots, so there is nothing to calibrate against. This is a tracking ' +
+            'problem, not an accuracy one: check that your whole face is lit and in frame, ' +
+            'take off reflective glasses if you can, and try again.',
+        )
+        return
+      }
+
       const model =
         boardRect &&
         buildCalibrationModel(
@@ -358,7 +416,8 @@ export default function CalibrationOverlay({
         setMessage(
           `Accuracy came out at about ${model.validationErrorSquares.toFixed(1)} squares — ` +
             'more than a square off. Better light on your face, a steadier head and holding ' +
-            'each dot a beat longer usually fixes it.',
+            'each dot a beat longer usually fixes it. ' +
+            `(Tracker signal ${(diagnostics.signalRatio * 100).toFixed(0)}% of target spread.)`,
         )
         return
       }
@@ -466,9 +525,20 @@ export default function CalibrationOverlay({
             </p>
             <p className={`text-base ${hasSignal ? 'text-[#7fd4ff]' : 'text-[#ff9d42] font-bold'}`}>
               {hasSignal
-                ? 'Tracking live — look at the dot, or click it to capture now'
+                ? 'Tracking live — look at the dot and hold'
                 : 'Waiting for the eye tracker… (camera on? face in frame?)'}
             </p>
+            {hasSignal && signalSpread !== null && (
+              <p
+                className={`text-base font-bold ${
+                  signalSpread < PINNED_SPREAD_PX ? 'text-[#ff5c5c]' : 'text-[#7fd4ff]/80'
+                }`}
+              >
+                {signalSpread < PINNED_SPREAD_PX
+                  ? `Tracker output is not moving (${signalSpread.toFixed(0)}px) — it is not seeing your eyes`
+                  : `Tracker signal ${signalSpread.toFixed(0)}px`}
+              </p>
+            )}
             <div className="mx-auto h-2 w-full rounded-full bg-white/20 overflow-hidden">
               <motion.div
                 className="h-full bg-[#ffd24a]"

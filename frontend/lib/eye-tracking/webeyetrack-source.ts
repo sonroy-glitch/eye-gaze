@@ -368,11 +368,31 @@ export class WebEyeTrackSource {
       this.lastHeadAt = now
     }
 
-    // The iris is occluded through a blink and `normPog` is forced to [0, 0] —
-    // dead centre of the screen — whenever the library calls the eyes closed. So
-    // a closed or face-lost frame must never reach the board: hold the cursor
-    // still rather than letting it snap to the middle of the board.
-    if (faceLost || this.eyesClosed) return
+    /*
+     * Whether this frame carries a real estimate at all — a strictly separate
+     * question from whether the player blinked, and conflating the two is
+     * expensive in both directions.
+     *
+     * `gazeState` is the library's own verdict, and when it says "closed" it
+     * does not run BlazeGaze at all: it returns `normPog: [0, 0]`, which maps to
+     * the exact centre of the screen. Its test is EAR < 0.2 on *either* eye,
+     * which is far more trigger-happy than the blendshape blink score — narrow
+     * eye apertures, glasses, and looking down all trip it while the blendshapes
+     * still read as open. So a frame the library refused to estimate must be
+     * dropped on the library's say-so, not on ours, whatever our own blink
+     * detector thinks.
+     *
+     * Getting this wrong is not a small error. Those [0, 0] frames sail through
+     * as a confident gaze point at the centre of the board, they outnumber the
+     * real ones, and the calibration's robust median over each target lands on
+     * the centre for every dot. The regression then has nothing to learn from
+     * and can only fit "predict the average target", which scores almost exactly
+     * 3.4 squares of validation error whatever the player does — the fixed,
+     * unimprovable number that is the signature of this bug rather than of a bad
+     * webcam. `npm run verify:gaze` asserts that signature so it stays caught.
+     */
+    const sentinelPog = r.normPog?.[0] === 0 && r.normPog?.[1] === 0
+    if (faceLost || this.eyesClosed || r.gazeState === 'closed' || sentinelPog) return
     if (!Array.isArray(r.normPog) || r.normPog.length < 2) return
     if (!Number.isFinite(r.normPog[0]) || !Number.isFinite(r.normPog[1])) return
 

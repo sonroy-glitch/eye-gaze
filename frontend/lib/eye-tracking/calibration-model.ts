@@ -480,6 +480,57 @@ const OUTLIER_RESIDUAL_RATIO = 2.5
 /** At most this many samples are ever discarded. */
 const MAX_OUTLIER_DROPS = 2
 
+/**
+ * Is the raw gaze stream actually moving with the targets, or is it pinned?
+ *
+ * This exists because a dead signal does not look like a failure to the
+ * regression — it looks like an easy problem with a boring answer. Least squares
+ * fits "predict the average target", every validation dot is then wrong by
+ * roughly its distance from the centre of the board, and the reported error is a
+ * stable ~3.4 squares that does not move however carefully the player sits. It
+ * reads as "this webcam is not good enough" when it is really "no estimate ever
+ * reached the fit". Measuring the input spread separates the two cases before
+ * the fit gets a chance to launder one into the other.
+ */
+export interface CalibrationDiagnostics {
+  /** Mean distance of the raw samples from their own centroid, in px. */
+  rawSpreadPx: number
+  /** Mean distance of the target points from their centroid, in px. */
+  targetSpreadPx: number
+  /** rawSpread / targetSpread. Healthy trackers land well above the floor below. */
+  signalRatio: number
+  degenerate: boolean
+}
+
+/**
+ * Below this ratio the raw stream is not tracking the targets in any usable way.
+ * A compressed-but-real signal is fine — the affine map exists to stretch it —
+ * but at 6% the same map amplifies the noise by ~17x along with the signal, so
+ * there is nothing to recover even in principle.
+ */
+export const MIN_SIGNAL_RATIO = 0.06
+
+function meanSpread(points: Array<{ x: number; y: number }>): number {
+  if (points.length < 2) return 0
+  const cx = points.reduce((sum, p) => sum + p.x, 0) / points.length
+  const cy = points.reduce((sum, p) => sum + p.y, 0) / points.length
+  return points.reduce((sum, p) => sum + Math.hypot(p.x - cx, p.y - cy), 0) / points.length
+}
+
+export function diagnoseCalibrationSamples(
+  samples: CalibrationSample[],
+): CalibrationDiagnostics {
+  const rawSpreadPx = meanSpread(samples.map((sample) => sample.raw))
+  const targetSpreadPx = meanSpread(samples.map((sample) => sample.expected))
+  const signalRatio = targetSpreadPx > 0 ? rawSpreadPx / targetSpreadPx : 0
+  return {
+    rawSpreadPx,
+    targetSpreadPx,
+    signalRatio,
+    degenerate: samples.length > 2 && signalRatio < MIN_SIGNAL_RATIO,
+  }
+}
+
 export function buildCalibrationModel(
   fitSamples: CalibrationSample[],
   validationSamples: CalibrationSample[],

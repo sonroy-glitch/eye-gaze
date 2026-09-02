@@ -9,6 +9,8 @@
 import { OneEuroFilter2D, smoothingToMinCutoff } from '@/lib/eye-tracking/one-euro'
 import {
   buildCalibrationModel,
+  diagnoseCalibrationSamples,
+  MIN_SIGNAL_RATIO,
   applyCalibrationModel,
   createCalibrationSample,
   headDriftScore,
@@ -135,6 +137,43 @@ const check = (name: string, ok: boolean, detail = '') => {
     }
     check('worst held-out target lands within a square', worst < 1.0, `${worst.toFixed(2)} squares`)
   }
+}
+
+// ------------------------------------------- the dead-signal signature
+{
+  const centre = { x: board.left + board.width / 2, y: board.top + board.height / 2 }
+  const stuck = (targets: typeof CALIBRATION_TARGETS) =>
+    targets.map((t) => createCalibrationSample(t, { x: centre.x, y: centre.y }, board))
+
+  const fit = stuck(CALIBRATION_TARGETS)
+  const model = buildCalibrationModel(fit, stuck(VALIDATION_TARGETS_ON_BOARD), board)
+  // Documents *why* 3.4 is the number to recognise: it is what least squares
+  // reports when it can only fit "predict the average target".
+  check(
+    'a pinned gaze stream produces the ~3.4-square signature',
+    !!model && Math.abs(model.validationErrorSquares - 3.4) < 0.2,
+    `${model?.validationErrorSquares.toFixed(2)} squares`,
+  )
+  check(
+    'and is caught as a dead signal rather than reported as poor accuracy',
+    diagnoseCalibrationSamples(fit).degenerate,
+    `signal ratio ${(diagnoseCalibrationSamples(fit).signalRatio * 100).toFixed(1)}% (floor ${MIN_SIGNAL_RATIO * 100}%)`,
+  )
+
+  // A real but heavily compressed signal must NOT be written off as dead.
+  let rng = 4242
+  const rand = () => ((rng = (rng * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) * 2 - 1
+  const compressed = CALIBRATION_TARGETS.map((t) => {
+    const v = targetToViewport(t, board)
+    return createCalibrationSample(
+      t,
+      { x: centre.x + (v.x - centre.x) * 0.25 + rand() * 3, y: centre.y + (v.y - centre.y) * 0.25 + rand() * 3 },
+      board,
+    )
+  })
+  const compressedDiag = diagnoseCalibrationSamples(compressed)
+  check('a compressed but real signal is not written off', !compressedDiag.degenerate,
+    `signal ratio ${(compressedDiag.signalRatio * 100).toFixed(0)}%`)
 }
 
 console.log(`\nADAPTATION ${ADAPTATION_TARGETS.length} + FIT ${CALIBRATION_TARGETS.length} + VALIDATION ${VALIDATION_TARGETS_ON_BOARD.length} = ${ADAPTATION_TARGETS.length + CALIBRATION_TARGETS.length + VALIDATION_TARGETS_ON_BOARD.length} dots`)
