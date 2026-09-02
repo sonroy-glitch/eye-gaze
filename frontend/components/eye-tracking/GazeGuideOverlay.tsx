@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Eye, Lightbulb, MousePointerClick, Move, RefreshCw, Target, Timer, Zap } from 'lucide-react'
+import { Eye, Lightbulb, MousePointerClick, Move, RefreshCw, Target, Timer } from 'lucide-react'
 import {
   ADAPTATION_TARGETS,
   CALIBRATION_TARGETS,
@@ -86,8 +86,8 @@ export default function GazeGuideOverlay({
     variant === 'before-calibration'
       ? `${TOTAL_DOTS} dots, about ${estimatedSeconds} seconds. Read these four things first — they are the difference between calibration working first time and having to redo it.`
       : reason === 'struggling'
-        ? 'Nothing has moved for a while, so here are the three steps again. If the board still will not follow your eyes, recalibrate.'
-        : 'Three steps. You can always fall back to the mouse — it keeps working.'
+        ? 'Nothing has moved for a while. If the board still will not follow your eyes, press C to recalibrate — or T to try the other eye tracker.'
+        : 'Three looks to a square, twice per move. You can always fall back to the mouse — it keeps working.'
 
   return (
     <AnimatePresence>
@@ -205,24 +205,24 @@ const SETUP_STEPS = [
 
 const PLAY_STEPS = [
   {
-    icon: Eye,
-    title: 'Look at the piece you want to move, and hold',
-    copy: 'A ring fills around the square as you hold it. When the ring completes, the piece is selected and its legal moves light up.',
+    icon: Target,
+    title: 'Look at the quarter of the board you want, and hold',
+    copy: 'A yellow frame fills around it, then that quarter zooms in to fill the screen.',
   },
   {
     icon: Target,
-    title: 'Look at the square you want to move to, and hold',
-    copy: 'Same again — hold your gaze until that square is the one highlighted. Looking back at the selected piece deselects it.',
+    title: 'Again, and once more — quarter, quarter, square',
+    copy: 'Three looks narrow the whole board down to one square. Every step asks the same easy question, so a webcam that is a square or two out still lands on exactly the square you meant. Look away from the board for a second to step back out.',
   },
   {
-    icon: Zap,
-    title: 'Blink deliberately to confirm the move',
-    copy: 'A long, firm blink (about half a second) commits it. Ordinary quick blinks are ignored, so nothing moves by accident.',
+    icon: Eye,
+    title: 'The third look picks the piece — then do it again to move it',
+    copy: 'Choosing your piece selects it and its legal moves light up. Repeat the three looks on the square you want to move to, and the move is played.',
   },
   {
     icon: RefreshCw,
     title: 'If the board is not following your eyes',
-    copy: 'Press C to recalibrate, H to bring these instructions back, or just use the mouse — clicking squares still works and quietly teaches the tracker as you go.',
+    copy: 'Press C to recalibrate, T to switch to the other eye tracker (the two fail differently — if one will not follow you, the other usually will), Z to turn off the three-step selection, H for these instructions. The mouse always works.',
   },
 ]
 

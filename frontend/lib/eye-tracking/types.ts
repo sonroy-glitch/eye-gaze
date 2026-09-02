@@ -72,3 +72,34 @@ export interface AccessibilitySettings {
   reducedMotion: boolean
   voiceFeedback: boolean
 }
+
+/**
+ * Which raw gaze estimator is driving the board.
+ *
+ * Two independent implementations are kept because they fail differently: the
+ * CNN can collapse to a near-constant output with nothing in its interface to
+ * say so, while the landmark pipeline can only fail loudly (no face, no
+ * descriptor). Whichever one is having a bad day on a given machine, camera or
+ * face, the other is usually fine — and switching is a keypress rather than a
+ * rebuild.
+ */
+export type GazeSourceKind = 'webeyetrack' | 'mediapipe'
+
+export const GAZE_SOURCE_LABELS: Record<GazeSourceKind, string> = {
+  webeyetrack: 'BlazeGaze CNN',
+  mediapipe: 'MediaPipe iris',
+}
+
+/** Everything `useGazeTracking` needs from a raw source, whichever it is. */
+export interface GazeSourceLike {
+  start(): Promise<void>
+  stop(): void
+  setBlinkSensitivity(sensitivity: 'low' | 'medium' | 'high'): void
+  feedAdaptationPoint(x: number, y: number): boolean
+  readonly ownsAdaptation: boolean
+  fps: number
+  cameraResolution: { width: number; height: number } | null
+  trackingIssue: TrackingIssue | null
+  msSinceLastResult(now?: number): number
+  msSinceLastUsableResult(now?: number): number
+}

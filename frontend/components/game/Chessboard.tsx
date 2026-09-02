@@ -36,6 +36,20 @@ interface ChessboardProps {
   layoutKey?: string
   /** Which way round to draw the board. Purely presentational. */
   orientation?: BoardOrientation
+  /**
+   * Magnify one square block of the board to fill the frame, in *drawn* cell
+   * coordinates. This is the second half of coarse-to-fine gaze selection: the
+   * grid is scaled about the block's corner so each square covers several times
+   * the pixels, which is what brings square-level selection inside the accuracy
+   * a webcam tracker can actually deliver.
+   */
+  zoomRegion?: { row: number; col: number; size: number } | null
+  /** Coarse region being dwelled on before zooming in, drawn as a target. */
+  pendingRegion?: { row: number; col: number; divisions: number } | null
+  /** 0..1 dwell progress on {@link pendingRegion}. */
+  pendingProgress?: number
+  /** How many times the board has been halved, for the "you are here" readout. */
+  regionDepth?: number
 }
 
 /**
@@ -77,6 +91,10 @@ export default function Chessboard({
   focusMode = false,
   layoutKey = '',
   orientation = DEFAULT_ORIENTATION,
+  zoomRegion = null,
+  pendingRegion = null,
+  pendingProgress = 0,
+  regionDepth = 0,
 }: ChessboardProps) {
   const legalMoves = useMemo(() => {
     if (!gameState.selectedSquare) return []
@@ -124,19 +142,36 @@ export default function Chessboard({
             }`}
             // Zero until the first measurement lands; rendering at a provisional
             // size first would move every square under the player's gaze.
+            // The gaze pipeline anchors calibration to this box, which stays
+            // put when the grid inside is magnified.
+            data-chessboard-frame=""
             style={{
               width: size || undefined,
               visibility: size ? 'visible' : 'hidden',
               borderColor: focusMode ? undefined : BOARD_COLORS.edge,
+              position: 'relative',
             }}
           >
             <div
               className="grid"
               // The gaze pipeline measures this element to turn a screen point
               // into a square, and needs to know which way round it is drawn.
+              // When zoomed, its bounding rect grows and shifts with the
+              // transform, so the existing point-to-square arithmetic keeps
+              // working with no special cases — the squares scrolled out of the
+              // frame simply become unreachable, which is the intent.
               data-chessboard=""
               data-orientation={orientation}
-              style={{ gridTemplateColumns: `repeat(${BOARD_SIZE}, 1fr)` }}
+              style={{
+                gridTemplateColumns: `repeat(${BOARD_SIZE}, 1fr)`,
+                transformOrigin: '0 0',
+                transform: zoomRegion
+                  ? `scale(${BOARD_SIZE / zoomRegion.size}) translate(${
+                      (-zoomRegion.col * 100) / BOARD_SIZE
+                    }%, ${(-zoomRegion.row * 100) / BOARD_SIZE}%)`
+                  : undefined,
+                transition: 'transform 220ms ease-out',
+              }}
             >
               {gameState.board.map((_, visualRow) =>
                 gameState.board[visualRow].map((__, visualCol) => {
@@ -191,6 +226,32 @@ export default function Chessboard({
                 }),
               )}
               </div>
+
+            {/*
+              Coarse-region target. Drawn over the board rather than inside the
+              grid so it is unaffected by the zoom transform, and kept deliberately
+              loud: at this stage the player is aiming at a quarter of the board
+              with an estimate that may be a couple of squares out, and they need
+              to see which quarter is winning well before it commits.
+            */}
+            {pendingRegion && (
+              <div
+                className="pointer-events-none absolute z-20 rounded-lg border-4 border-[#ffd24a]"
+                style={{
+                  left: `${(pendingRegion.col * 100) / pendingRegion.divisions}%`,
+                  top: `${(pendingRegion.row * 100) / pendingRegion.divisions}%`,
+                  width: `${100 / pendingRegion.divisions}%`,
+                  height: `${100 / pendingRegion.divisions}%`,
+                  backgroundColor: `rgba(255, 210, 74, ${0.12 + 0.2 * pendingProgress})`,
+                  boxShadow: '0 0 0 2px rgba(0,0,0,0.35) inset',
+                }}
+              >
+                <div
+                  className="absolute bottom-0 left-0 h-2 bg-[#ffd24a]"
+                  style={{ width: `${pendingProgress * 100}%` }}
+                />
+              </div>
+            )}
             </motion.div>
         </div>
       </div>

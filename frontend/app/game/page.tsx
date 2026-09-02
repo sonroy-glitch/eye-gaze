@@ -27,8 +27,10 @@ import { getBestMove } from '@/lib/chess/stockfish-api'
 import { applyUciMove } from '@/lib/chess/apply-move'
 import { useGazeTracking } from '@/lib/eye-tracking/useGazeTracking'
 import { useGazeInteraction } from '@/lib/eye-tracking/useGazeInteraction'
+import { useGazeRegionDwell } from '@/lib/eye-tracking/useGazeRegionDwell'
 import { toAlgebraic, getBoardGeometry, invalidateBoardGeometry } from '@/lib/eye-tracking/board-mapping'
-import { DEFAULT_ORIENTATION, type BoardOrientation } from '@/lib/chess/orientation'
+import { DEFAULT_ORIENTATION, toLogical, type BoardOrientation } from '@/lib/chess/orientation'
+import { GAZE_SOURCE_LABELS } from '@/lib/eye-tracking/types'
 
 /**
  * Smallest square (CSS px) at which gaze selection is allowed. Gaze error is
@@ -48,6 +50,38 @@ const STRUGGLE_SECONDS = 45
 
 /** Blink-confirms that produced no legal move before we re-show the guide. */
 const STRUGGLE_FAILED_ATTEMPTS = 3
+
+/**
+ * Coarse-to-fine selection: at every step the player picks one quarter of what
+ * is currently on screen, and that quarter is magnified to fill the frame.
+ * Repeating that from the whole board reaches a single square in three looks
+ * (8x8 -> 4x4 -> 2x2 -> 1).
+ *
+ * This is the setting that decides whether the game is playable at all on a
+ * given tracker, and the reason it halves rather than jumping straight to
+ * squares is worth stating precisely.
+ *
+ * Gaze error is roughly constant in *pixels*. Picking a square directly off the
+ * full board means hitting a target one square wide, so the estimate has to be
+ * good to about half a square — around 50px on a typical fullscreen board. No
+ * consumer webcam pipeline does that reliably, and no amount of dwell time or
+ * smoothing fixes an error larger than the target.
+ *
+ * Halving keeps the target the same size on screen at every step: the quarter
+ * being chosen is always half the visible frame, so the tolerance is always a
+ * quarter of the frame — about 200px, or four times what direct selection
+ * demands, and the *same* at each step so there is no weak link. A first attempt
+ * at this used one coarse pick then a direct square pick, which looked
+ * equivalent but was not: the final step still had to resolve a square inside a
+ * quarter-sized frame, at 100px, and that step alone set the accuracy the whole
+ * scheme needed. `npm run verify:gaze` checks the tolerance is uniform.
+ */
+const COARSE_DIVISIONS = 2
+/** Board edge in squares; the zoom stack halves from here down to one. */
+const FULL_REGION = 8
+
+/** How long the gaze must sit off the board to back out of a magnified block. */
+const ZOOM_CANCEL_MS = 1400
 
 /** Where the accessibility settings are remembered between visits. */
 const ACCESSIBILITY_STORAGE_KEY = 'armaan.chess.accessibility.v1'
@@ -92,6 +126,19 @@ export default function GamePage() {
    * it should" feels like from the player's side of the screen.
    */
   const [hint, setHint] = useState<string | null>(null)
+  /**
+   * Coarse-to-fine is on by default for gaze. It costs one extra look per move
+   * and is the difference between "the board follows my eyes" and "the board
+   * cannot tell which square I mean" on any consumer webcam. Toggle with Z for
+   * anyone whose tracking is good enough to go straight to squares.
+   */
+  const [coarseToFine, setCoarseToFine] = useState(true)
+  /** The magnified block, in drawn cell coordinates, or null at the coarse stage. */
+  const [zoomRegion, setZoomRegion] = useState<{
+    row: number
+    col: number
+    size: number
+  } | null>(null)
   const [debugGaze, setDebugGaze] = useState(false)
   const [calibrationProgress, setCalibrationProgress] = useState(0)
   /** Board square edge in px, polled while in gaze mode for the size gate. */
@@ -188,6 +235,7 @@ export default function GamePage() {
       if (!fs) {
         setShowCalibration(false)
         setGuide(null)
+        setZoomRegion(null)
       }
       invalidateBoardGeometry()
     }
@@ -209,7 +257,8 @@ export default function GamePage() {
   }, [isFullscreen])
 
   // F toggles fullscreen eye control, C recalibrates, H re-shows the
-  // instructions, V flips the board. Reaching
+  // instructions, Z toggles coarse-to-fine, T swaps the tracker, V flips the
+  // board. Reaching
   // a button is exactly the interaction a gaze user finds hardest, so the view
   // controls stay keyboard-first.
   useEffect(() => {
@@ -231,6 +280,15 @@ export default function GamePage() {
           setGuideReason('manual')
           setGuide('how-to-play')
         }
+      } else if (e.key === 'z' || e.key === 'Z') {
+        e.preventDefault()
+        setCoarseToFine((on) => !on)
+        setZoomRegion(null)
+      } else if (e.key === 't' || e.key === 'T') {
+        // Swap estimators without leaving the game. Each keeps its own
+        // calibration, so switching back is free.
+        e.preventDefault()
+        void gaze.switchSource(gaze.sourceKind === 'mediapipe' ? 'webeyetrack' : 'mediapipe')
       } else if (e.key === 'd' || e.key === 'D') {
         e.preventDefault()
         setDebugGaze((enabled) => !enabled)
@@ -241,7 +299,7 @@ export default function GamePage() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [enterEyeControl, exitEyeControl, isFullscreen, restartCalibration])
+  }, [enterEyeControl, exitEyeControl, gaze, isFullscreen, restartCalibration])
 
   // The hint is a nudge, not a dialog: it clears itself.
   useEffect(() => {
@@ -338,8 +396,53 @@ export default function GamePage() {
   gameStateRef.current = gameState
 
   // Gaze dwell selects a piece; a deliberate blink confirms the move.
+  /**
+   * Act on a square the player has picked by eye: select their own piece, or —
+   * if one is already selected — play the move. Shared by the zoom stack and by
+   * the direct dwell path so both behave identically.
+   */
+  const commitGazeSquare = useCallback(
+    (pos: BoardPosition) => {
+      const current = gameStateRef.current
+      if (!current.whiteToMove || isGameOver(current.status)) return
+
+      const piece = getPieceAt(current.board, pos.row, pos.col)
+      const myColor = current.whiteToMove ? 'white' : 'black'
+
+      if (piece && piece.color === myColor) {
+        setHint(null)
+        setGameState({ ...current, selectedSquare: pos })
+        return
+      }
+
+      if (!current.selectedSquare) {
+        setHint('Pick one of your own pieces first — that square is not yours to move.')
+        return
+      }
+
+      const next = makeMove(current, current.selectedSquare, pos)
+      if (!next) {
+        failedAttemptsRef.current += 1
+        setHint('That is not a legal move for the selected piece. Its legal squares are highlighted.')
+        if (failedAttemptsRef.current >= STRUGGLE_FAILED_ATTEMPTS) showStruggleGuide()
+        return
+      }
+
+      setHint(null)
+      setGameState(next)
+      noteProgress()
+    },
+    [noteProgress, showStruggleGuide],
+  )
+
   const handleGazeDwell = (pos: BoardPosition) => {
     if (!isHumanTurn) return
+    // Back out to the whole board after every fine-stage commit: the next thing
+    // the player needs is a different quadrant (the destination), and leaving
+    // them zoomed into the piece they just picked would make the far side of the
+    // board unreachable without an explicit "zoom out" they have no way to ask
+    // for by eye.
+    setZoomRegion(null)
     setGameState((prev) => {
       const piece = getPieceAt(prev.board, pos.row, pos.col)
       const myColor = prev.whiteToMove ? 'white' : 'black'
@@ -379,6 +482,7 @@ export default function GamePage() {
     }
 
     setHint(null)
+    setZoomRegion(null)
     setGameState(next)
     noteProgress()
   }
@@ -420,6 +524,59 @@ export default function GamePage() {
     return () => clearInterval(id)
   }, [gazeControlReady, isHumanTurn, showStruggleGuide])
 
+  /*
+   * Two selection stages share one gaze stream, and exactly one of them is live
+   * at a time. At the coarse stage the region dwell owns the gaze and the square
+   * dwell is disabled, so a stray square commit cannot fire behind the zoom; once
+   * a region is chosen they swap. With coarse-to-fine off, the square dwell runs
+   * the whole time exactly as before.
+   */
+  const coarseStageActive = coarseToFine && gazeControlReady && isHumanTurn
+  const fineStageActive = gazeControlReady && isHumanTurn && !coarseToFine
+
+  /**
+   * One dwell step of the zoom stack. The board frame always displays the
+   * current region, so dwelling on a quarter *of the frame* is dwelling on a
+   * quarter of that region — the hook needs to know nothing about the stack.
+   */
+  const {
+    region: pendingRegion,
+    progress: regionProgress,
+    onBoard: regionOnBoard,
+  } = useGazeRegionDwell({
+    enabled: coarseStageActive,
+    gazePoint: gaze.state.gazePoint,
+    divisions: COARSE_DIVISIONS,
+    dwellTime: accessibility.dwellTime,
+    onCommit: (picked) => {
+      const current = zoomRegionRef.current ?? { row: 0, col: 0, size: FULL_REGION }
+      const half = current.size / COARSE_DIVISIONS
+      const next = {
+        row: current.row + picked.row * half,
+        col: current.col + picked.col * half,
+        size: half,
+      }
+      noteProgress()
+
+      if (half > 1) {
+        setZoomRegion(next)
+        return
+      }
+
+      // Down to a single cell: that is the square, in drawing order. Acting on
+      // it here rather than waiting for a blink is deliberate — three deliberate
+      // dwells are already an unambiguous statement of intent, and it removes
+      // blink detection from the critical path of every move.
+      setZoomRegion(null)
+      const square = toLogical({ row: next.row, col: next.col }, orientation)
+      commitGazeSquare(square)
+    },
+  })
+
+  /** Current region, read inside the commit handler without re-arming the dwell. */
+  const zoomRegionRef = useRef(zoomRegion)
+  zoomRegionRef.current = zoomRegion
+
   const {
     rawSquare,
     stableSquare,
@@ -428,7 +585,7 @@ export default function GamePage() {
     confidence: dwellConfidence,
     onBoard: gazeOnBoard,
   } = useGazeInteraction({
-    enabled: gazeControlReady && isHumanTurn,
+    enabled: fineStageActive,
     gazePoint: gaze.state.gazePoint,
     rawGazePoint: gaze.state.rawGazePoint,
     dwellTime: accessibility.dwellTime,
@@ -437,6 +594,30 @@ export default function GamePage() {
     onDwell: handleGazeDwell,
     onBlinkConfirm: handleBlinkConfirm,
   })
+
+  /**
+   * Looking away is how you cancel a zoom. There is no reachable "back" control
+   * for someone using only their eyes — a button would need the very precision
+   * the zoom exists to avoid needing — so the gesture is simply to look off the
+   * board, which is also what a player does naturally when they change their
+   * mind about which side of the board they were considering.
+   */
+  useEffect(() => {
+    if (!zoomRegion || !gazeControlReady || regionOnBoard) return
+    const id = setTimeout(() => {
+      // Back out one level per pause rather than all the way to the full board:
+      // overshooting by one quarter is the common mistake, and undoing it should
+      // cost one look, not the whole descent.
+      setZoomRegion((current) => {
+        if (!current) return null
+        const size = current.size * COARSE_DIVISIONS
+        if (size >= FULL_REGION) return null
+        const snap = (v: number) => Math.floor(v / size) * size
+        return { row: snap(current.row), col: snap(current.col), size }
+      })
+    }, ZOOM_CANCEL_MS)
+    return () => clearTimeout(id)
+  }, [zoomRegion, regionOnBoard, gazeControlReady])
 
   // Mouse fallback: click to select, click again to move.
   const handleSquareClick = (row: number, col: number) => {
@@ -598,6 +779,38 @@ export default function GamePage() {
         </div>
       )}
 
+      {/* What is driving the board and how to change it. In fullscreen every
+          other affordance is gone, so the two keys that rescue a bad session —
+          swap tracker, turn two-step selection off — have to be visible. */}
+      {isFullscreen && !guide && !showCalibration && (
+        <div className="fixed top-3 left-3 z-[60] flex items-center gap-3 rounded-lg border border-white/25 bg-[#0d1117]/90 px-3 py-1.5 text-sm text-[#c3cede]">
+          <span className="font-semibold text-white">
+            {GAZE_SOURCE_LABELS[gaze.sourceKind]}
+          </span>
+          <span className="text-white/30">|</span>
+          <span>
+            {coarseToFine
+              ? zoomRegion
+                ? zoomRegion.size > COARSE_DIVISIONS
+                  ? 'narrow it down'
+                  : 'pick the square'
+                : 'pick a quarter'
+              : 'direct'}
+          </span>
+          <span className="text-white/30">|</span>
+          <span className="text-[#9fb0c6]">T tracker · Z two-step · C recalibrate</span>
+        </div>
+      )}
+
+      {/* We changed estimators for them; without saying so the calibration
+          prompt that follows looks like the app forgetting itself. */}
+      {isFullscreen && gaze.autoSwitched && !guide && (
+        <div className="fixed top-14 left-1/2 z-[66] w-[min(92vw,42rem)] -translate-x-1/2 rounded-xl border-2 border-[#7fd4ff] bg-[#0d1117] px-5 py-3 text-center text-base font-semibold text-[#7fd4ff] shadow-lg">
+          The first eye tracker produced no usable signal, so we switched to{' '}
+          {GAZE_SOURCE_LABELS[gaze.sourceKind]}. Press C to calibrate it.
+        </div>
+      )}
+
       {/* Head has left the pose calibration was collected at. The mapping cannot
           be repaired without new ground truth, so say so plainly instead of
           letting the board quietly stop obeying. */}
@@ -701,6 +914,14 @@ export default function GamePage() {
             focusMode={focusMode}
             layoutKey={`${leftOpen}-${rightOpen}`}
             orientation={orientation}
+            zoomRegion={zoomRegion}
+            pendingRegion={
+              coarseStageActive && pendingRegion
+                ? { ...pendingRegion, divisions: COARSE_DIVISIONS }
+                : null
+            }
+            regionDepth={zoomRegion ? Math.log2(FULL_REGION / zoomRegion.size) : 0}
+            pendingProgress={regionProgress}
           />
         </motion.div>
 

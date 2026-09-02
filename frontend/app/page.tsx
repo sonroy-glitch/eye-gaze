@@ -38,9 +38,21 @@ const STEPS = [
     title: '1. Calibrate',
     copy: 'Eighteen dots, about seventeen seconds. Look at each one; the game learns where your eyes point.',
   },
-  { icon: Eye, title: '2. Look', copy: 'Hold your gaze on a piece for about a second to select it.' },
-  { icon: Crosshair, title: '3. Gaze', copy: 'Hold your gaze on the square you want to move to.' },
-  { icon: Zap, title: '4. Blink', copy: 'One deliberate, half-second blink confirms the move.' },
+  {
+    icon: Eye,
+    title: '2. Narrow it down',
+    copy: 'Look at a quarter of the board and hold. It zooms in. Three looks reach one square.',
+  },
+  {
+    icon: Crosshair,
+    title: '3. Pick and move',
+    copy: 'Three looks choose your piece, three more choose where it goes.',
+  },
+  {
+    icon: Zap,
+    title: '4. Built for real webcams',
+    copy: 'Because every step is a big target, an ordinary camera is accurate enough to play.',
+  },
 ]
 
 /**
@@ -79,8 +91,8 @@ const FEATURES = [
   },
   {
     icon: Zap,
-    title: 'Blink Confirmation',
-    copy: 'Nothing moves until you say so — a deliberate blink commits the move.',
+    title: 'Zoom-to-Select',
+    copy: 'Each look narrows the board by half, so no step ever needs pinpoint accuracy.',
   },
   {
     icon: Brain,
@@ -108,7 +120,7 @@ const ACCESS_POINTS = [
   {
     icon: Accessibility,
     title: 'Hands-free by default',
-    copy: 'Every part of a game — selecting, moving, confirming — is reachable with gaze and a blink alone.',
+    copy: 'Every part of a game — selecting, moving, confirming — is reachable with gaze alone.',
   },
   {
     icon: Keyboard,

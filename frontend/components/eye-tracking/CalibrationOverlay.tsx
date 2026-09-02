@@ -17,7 +17,10 @@ import {
   type CalibrationSample,
   type CalibrationTarget,
 } from '@/lib/eye-tracking/calibration-model'
-import { getBoardGeometry, invalidateBoardGeometry, toBoardRect } from '@/lib/eye-tracking/board-mapping'
+import {
+  getBoardFrameRect,
+  invalidateBoardGeometry,
+} from '@/lib/eye-tracking/board-mapping'
 import type { GazePoint, HeadPose } from '@/lib/eye-tracking/types'
 
 /**
@@ -67,8 +70,10 @@ interface CalibrationOverlayProps {
 }
 
 function resolve(target: CalibrationTarget): { x: number; y: number } {
-  const geom = getBoardGeometry()
-  if (geom) return targetToViewport(target, toBoardRect(geom))
+  // Always the layout box: calibration runs unzoomed, and anchoring the dots to
+  // anything that can be magnified would bake a zoom factor into the model.
+  const rect = getBoardFrameRect()
+  if (rect) return targetToViewport(target, rect)
   const side = Math.min(window.innerWidth, window.innerHeight) * 0.8
   const originX = (window.innerWidth - side) / 2
   const originY = (window.innerHeight - side) / 2
@@ -76,8 +81,7 @@ function resolve(target: CalibrationTarget): { x: number; y: number } {
 }
 
 function rectForCurrentBoard() {
-  const geom = getBoardGeometry()
-  return geom ? toBoardRect(geom) : null
+  return getBoardFrameRect()
 }
 
 export default function CalibrationOverlay({

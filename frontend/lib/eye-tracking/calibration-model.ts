@@ -8,6 +8,18 @@ import type { HeadPose } from './types'
  */
 export const GAZE_CALIBRATION_STORAGE_KEY = 'armaan.chess.gazeCalibration.v3'
 
+/**
+ * Calibration is stored per gaze source. A model fitted against BlazeGaze's
+ * output is meaningless applied to the landmark pipeline's — the two produce
+ * completely different raw values — so sharing one key would silently hand a
+ * newly-switched source someone else's mapping and look exactly like a broken
+ * tracker. Keeping them separate also means switching back and forth costs no
+ * recalibration.
+ */
+export function calibrationStorageKey(source: string): string {
+  return `${GAZE_CALIBRATION_STORAGE_KEY}.${source}`
+}
+
 export type CalibrationPhase =
   | 'idle'
   /** Teaching WebEyeTrack's own on-device model where the user is looking. */
@@ -627,15 +639,15 @@ export function buildCalibrationModel(
   return fitModel(chosenSamples, chosenKind, boardRect, chosenQuality, dropped)
 }
 
-export function saveCalibrationModel(model: CalibrationModel): void {
+export function saveCalibrationModel(model: CalibrationModel, source: string): void {
   if (typeof window === 'undefined') return
-  window.localStorage.setItem(GAZE_CALIBRATION_STORAGE_KEY, JSON.stringify(model))
+  window.localStorage.setItem(calibrationStorageKey(source), JSON.stringify(model))
 }
 
-export function loadCalibrationModel(): CalibrationModel | null {
+export function loadCalibrationModel(source: string): CalibrationModel | null {
   if (typeof window === 'undefined') return null
   try {
-    const raw = window.localStorage.getItem(GAZE_CALIBRATION_STORAGE_KEY)
+    const raw = window.localStorage.getItem(calibrationStorageKey(source))
     if (!raw) return null
     const model = JSON.parse(raw) as CalibrationModel
     if (
@@ -652,7 +664,7 @@ export function loadCalibrationModel(): CalibrationModel | null {
   }
 }
 
-export function clearCalibrationModel(): void {
+export function clearCalibrationModel(source: string): void {
   if (typeof window === 'undefined') return
-  window.localStorage.removeItem(GAZE_CALIBRATION_STORAGE_KEY)
+  window.localStorage.removeItem(calibrationStorageKey(source))
 }

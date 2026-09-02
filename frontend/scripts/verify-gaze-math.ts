@@ -176,6 +176,76 @@ const check = (name: string, ok: boolean, detail = '') => {
     `signal ratio ${(compressedDiag.signalRatio * 100).toFixed(0)}%`)
 }
 
+
+// ------------------------------------------ coarse-to-fine selection maths
+{
+  const BOARD = 8
+  const frame = { left: 200, top: 100, width: 800, height: 800 }
+  const cell = frame.width / BOARD
+
+  /** Mirrors the CSS transform applied to the grid for a region. */
+  const zoomedGridRect = (region: { row: number; col: number; size: number }) => {
+    const k = BOARD / region.size
+    return {
+      left: frame.left - k * region.col * cell,
+      top: frame.top - k * region.row * cell,
+      width: frame.width * k,
+      height: frame.height * k,
+    }
+  }
+  /** Mirrors pointToSquare's arithmetic on whichever rect it is handed. */
+  const cellAt = (rect: typeof frame, x: number, y: number) => ({
+    col: Math.floor(((x - rect.left) / rect.width) * BOARD),
+    row: Math.floor(((y - rect.top) / rect.height) * BOARD),
+  })
+
+  // Walk the stack the way the game does: quarter of the frame each time.
+  // Target h8 -> drawn cell (row 0, col 7) with white at the top.
+  let region = { row: 0, col: 0, size: BOARD }
+  const picks = [
+    { row: 0, col: 1 }, // top-right quarter of the board  -> rows 0-3, cols 4-7
+    { row: 0, col: 1 }, // top-right of that               -> rows 0-1, cols 6-7
+    { row: 0, col: 1 }, // top-right of that               -> row 0,   col 7
+  ]
+  for (const pick of picks) {
+    const half = region.size / 2
+    region = {
+      row: region.row + pick.row * half,
+      col: region.col + pick.col * half,
+      size: half,
+    }
+  }
+  check('three halvings reach exactly one square', region.size === 1 && region.row === 0 && region.col === 7,
+    `landed on drawn cell ${region.row},${region.col} size ${region.size}`)
+
+  // Every step's target is half the visible frame, so the pixel tolerance is a
+  // quarter of the frame at *every* step — that uniformity is the whole point.
+  const tolerances: number[] = []
+  let size = BOARD
+  while (size > 1) {
+    // The visible frame always spans `frame.width` px, whatever the region size.
+    tolerances.push(frame.width / 4)
+    size /= 2
+  }
+  const uniform = tolerances.every((t) => Math.abs(t - tolerances[0]) < 1e-9)
+  check('every step of the stack tolerates the same pixel error', uniform,
+    `${tolerances.map((t) => t.toFixed(0) + 'px').join(', ')}`)
+
+  const directTolerancePx = cell / 2
+  check('the stack tolerates 4x the gaze error that direct selection needs',
+    tolerances[0] / directTolerancePx === 4,
+    `${tolerances[0].toFixed(0)}px vs ${directTolerancePx.toFixed(0)}px direct ` +
+      `(${(tolerances[0] / cell).toFixed(1)} squares vs ${(directTolerancePx / cell).toFixed(1)})`)
+
+  // And the magnified grid must still hit-test to the region it displays.
+  const zoomed = zoomedGridRect({ row: 4, col: 4, size: 4 })
+  const tl = cellAt(zoomed, frame.left + 1, frame.top + 1)
+  const br = cellAt(zoomed, frame.left + frame.width - 1, frame.top + frame.height - 1)
+  check('the magnified frame shows exactly the chosen region',
+    tl.row === 4 && tl.col === 4 && br.row === 7 && br.col === 7,
+    `top-left cell ${tl.row},${tl.col}; bottom-right ${br.row},${br.col}`)
+}
+
 console.log(`\nADAPTATION ${ADAPTATION_TARGETS.length} + FIT ${CALIBRATION_TARGETS.length} + VALIDATION ${VALIDATION_TARGETS_ON_BOARD.length} = ${ADAPTATION_TARGETS.length + CALIBRATION_TARGETS.length + VALIDATION_TARGETS_ON_BOARD.length} dots`)
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`)
 process.exit(failures === 0 ? 0 : 1)

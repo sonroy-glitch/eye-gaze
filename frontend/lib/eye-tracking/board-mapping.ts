@@ -45,6 +45,17 @@ export interface BoardRect {
 }
 
 const BOARD_SELECTOR = '[data-chessboard]'
+/**
+ * The board's *layout* box, which does not move when the grid inside it is
+ * magnified for coarse-to-fine selection.
+ *
+ * Two rects are needed once the board can zoom. Hit-testing must use the
+ * transformed grid — that is what the player is actually looking at — while
+ * calibration must use this one, because a calibration model is anchored to
+ * where the board sat when it was fitted, and re-anchoring it onto a magnified
+ * grid would stretch every prediction by the zoom factor.
+ */
+const BOARD_FRAME_SELECTOR = '[data-chessboard-frame]'
 
 /**
  * Measure the playing area.
@@ -73,6 +84,29 @@ export function readBoardGeometry(): BoardGeometry | null {
   }
 }
 
+/** Layout box of the board, ignoring any zoom transform on the grid. */
+export function readBoardFrameRect(): BoardRect | null {
+  if (typeof document === 'undefined') return null
+  const frame = document.querySelector(BOARD_FRAME_SELECTOR)
+  // Falling back to the grid keeps every caller working when the board is not
+  // zoomed, which is the only state the frame element did not exist for.
+  const element = frame ?? document.querySelector(BOARD_SELECTOR)
+  if (!element) return null
+  const rect = element.getBoundingClientRect()
+  if (!(rect.width > 0) || !(rect.height > 0)) return null
+  return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+}
+
+let cachedFrame: BoardRect | null = null
+let cachedFrameAt = 0
+
+export function getBoardFrameRect(now = performance.now()): BoardRect | null {
+  if (cachedFrame && now - cachedFrameAt < GEOMETRY_TTL_MS) return cachedFrame
+  cachedFrame = readBoardFrameRect()
+  cachedFrameAt = now
+  return cachedFrame
+}
+
 let cached: BoardGeometry | null = null
 let cachedAt = 0
 const GEOMETRY_TTL_MS = 250
@@ -93,6 +127,8 @@ export function getBoardGeometry(now = performance.now()): BoardGeometry | null 
 export function invalidateBoardGeometry(): void {
   cached = null
   cachedAt = 0
+  cachedFrame = null
+  cachedFrameAt = 0
 }
 
 if (typeof window !== 'undefined') {
@@ -200,7 +236,7 @@ export function sameSquare(a: BoardPosition | null, b: BoardPosition | null): bo
  * ever shown, and the prediction becomes extrapolation. Past roughly 15% the
  * only real fix is to calibrate again at the size being played on.
  */
-export function boardScaleRatio(from: BoardRect | null, to: BoardGeometry | null): number | null {
+export function boardScaleRatio(from: BoardRect | null, to: BoardRect | null): number | null {
   if (!from || !to || !(from.width > 0) || !(to.width > 0)) return null
   return to.width / from.width
 }
@@ -215,7 +251,7 @@ export function boardScaleRatio(from: BoardRect | null, to: BoardGeometry | null
 export function remapForBoard(
   point: { x: number; y: number },
   from: BoardRect | null,
-  to: BoardGeometry | null,
+  to: BoardRect | null,
 ): { x: number; y: number } {
   if (!from || !to) return point
   if (!(from.width > 0) || !(from.height > 0)) return point
