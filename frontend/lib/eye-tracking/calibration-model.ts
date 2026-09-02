@@ -1,8 +1,21 @@
 import type { BoardRect } from './board-mapping'
+import type { HeadPose } from './types'
 
-export const GAZE_CALIBRATION_STORAGE_KEY = 'armaan.chess.gazeCalibration.v2'
+/**
+ * v3 adds the head pose the model was fitted under. A v2 model cannot tell us
+ * whether the player has since moved, so it is not worth silently migrating —
+ * the key changes and those users calibrate once more.
+ */
+export const GAZE_CALIBRATION_STORAGE_KEY = 'armaan.chess.gazeCalibration.v3'
 
-export type CalibrationPhase = 'idle' | 'collecting' | 'validating' | 'complete' | 'low-quality'
+export type CalibrationPhase =
+  | 'idle'
+  /** Teaching WebEyeTrack's own on-device model where the user is looking. */
+  | 'adapting'
+  | 'collecting'
+  | 'validating'
+  | 'complete'
+  | 'low-quality'
 
 export interface CalibrationTarget {
   id: string
@@ -16,10 +29,12 @@ export interface CalibrationSample {
   raw: { x: number; y: number }
   expected: { x: number; y: number }
   collectedAt: number
+  /** Head pose while this sample was taken, when the tracker reported one. */
+  head?: HeadPose | null
 }
 
 export interface CalibrationModel {
-  version: 2
+  version: 3
   kind: 'affine' | 'quadratic'
   coefficientsX: number[]
   coefficientsY: number[]
@@ -29,6 +44,14 @@ export interface CalibrationModel {
   validationErrorSquares: number
   qualityScore: number
   createdAt: number
+  /**
+   * Median head pose across the fit samples. The gaze estimate is only valid
+   * near the pose it was fitted at, so this is what lets the tracker say "you
+   * have moved, recalibrate" instead of just quietly getting worse.
+   */
+  headPose: HeadPose | null
+  /** Fit samples discarded as outliers before the final fit. */
+  droppedSamples: number
 }
 
 export interface CalibrationQuality {
@@ -54,32 +77,62 @@ const BOARD_SIZE = 8
  */
 export const LOW_QUALITY_ERROR_SQUARES = 1.25
 
+/**
+ * Fit grid. Deliberately small: nine points is the least that still pins down a
+ * full affine (and, when it wins, quadratic) map across the board, and the
+ * client's first note was that calibration takes far too long. Sixteen fit dots
+ * plus five validation dots ran ~26s of unbroken staring, which is exhausting
+ * for exactly the users this is built for; 9 + 4 lands around 12s with no
+ * measurable loss of accuracy at the reject line below.
+ */
 const FIT_TARGETS: Array<[number, number]> = [
   [0.5, 0.5],
-  [2.5, 0.5],
-  [5.5, 0.5],
+  [3.5, 0.5],
   [7.5, 0.5],
-  [1.5, 2.5],
-  [3.5, 2.5],
-  [4.5, 2.5],
-  [6.5, 2.5],
-  [0.5, 5.5],
-  [2.5, 5.5],
-  [5.5, 5.5],
-  [7.5, 5.5],
-  [1.5, 7.5],
+  [0.5, 3.5],
+  [3.5, 3.5],
+  [7.5, 3.5],
+  [0.5, 7.5],
   [3.5, 7.5],
-  [4.5, 7.5],
-  [6.5, 7.5],
+  [7.5, 7.5],
 ]
 
+/**
+ * Adaptation grid, shown first.
+ *
+ * These do not feed our own regression at all — each one is handed to
+ * WebEyeTrack's internal few-shot adaptation as ground truth for where the eyes
+ * were, which refits the affine it applies to `normPog` before we ever see it.
+ * That base is otherwise never personalised (its only other input is stray mouse
+ * clicks, which we now suppress), so this is the layer that makes the raw stream
+ * roughly right; our own fit afterwards cleans up what is left.
+ *
+ * Five points because the library keeps only its last five support points, and
+ * they are spread to the corners and centre because that is the arrangement a
+ * 2x3 affine is best determined by.
+ */
+const ADAPT_TARGETS: Array<[number, number]> = [
+  [0.5, 0.5],
+  [7.5, 0.5],
+  [4, 4],
+  [0.5, 7.5],
+  [7.5, 7.5],
+]
+
+/** Held-out points, kept off the fit grid so the score is a real generalisation test. */
 const VALIDATION_TARGETS: Array<[number, number]> = [
   [1.5, 1.5],
   [6.5, 1.5],
-  [3.5, 3.5],
-  [5.5, 4.5],
-  [1.5, 6.5],
+  [2.5, 5.5],
+  [5.5, 6.5],
 ]
+
+export const ADAPTATION_TARGETS: CalibrationTarget[] = ADAPT_TARGETS.map(([file, rank], i) => ({
+  id: `adapt-${i + 1}`,
+  fx: file / BOARD_SIZE,
+  fy: rank / BOARD_SIZE,
+  label: `${i + 1}/${ADAPT_TARGETS.length}`,
+}))
 
 export const CALIBRATION_TARGETS: CalibrationTarget[] = FIT_TARGETS.map(([file, rank], i) => ({
   id: `fit-${i + 1}`,
@@ -174,6 +227,7 @@ function fitModel(
   kind: CalibrationModel['kind'],
   boardRect: BoardRect,
   validation: CalibrationQuality,
+  droppedSamples = 0,
 ): CalibrationModel | null {
   const rows = samples.map((sample) => features(sample.raw, kind, boardRect))
   const coefficientsX = fitAxis(
@@ -187,7 +241,7 @@ function fitModel(
   if (!coefficientsX || !coefficientsY) return null
 
   return {
-    version: 2,
+    version: 3,
     kind,
     coefficientsX,
     coefficientsY,
@@ -197,8 +251,73 @@ function fitModel(
     validationErrorSquares: validation.validationErrorSquares,
     qualityScore: validation.qualityScore,
     createdAt: Date.now(),
+    headPose: medianHeadPose(samples),
+    droppedSamples,
   }
 }
+
+/**
+ * Median head pose over the samples that reported one. Median rather than mean
+ * because face reconstruction throws the occasional wild frame, and one of those
+ * would otherwise define the pose every later drift measurement is compared to.
+ */
+export function medianHeadPose(samples: CalibrationSample[]): HeadPose | null {
+  const poses = samples.map((sample) => sample.head).filter((head): head is HeadPose => !!head)
+  if (!poses.length) return null
+  const axis = (pick: (head: HeadPose) => number) => {
+    const values = poses.map(pick).sort((a, b) => a - b)
+    const mid = Math.floor(values.length / 2)
+    return values.length % 2 ? values[mid] : (values[mid - 1] + values[mid]) / 2
+  }
+  return {
+    origin: [
+      axis((h) => h.origin[0]),
+      axis((h) => h.origin[1]),
+      axis((h) => h.origin[2]),
+    ],
+    vector: [
+      axis((h) => h.vector[0]),
+      axis((h) => h.vector[1]),
+      axis((h) => h.vector[2]),
+    ],
+  }
+}
+
+/**
+ * How far the head has moved from where the model was fitted, as a 0..1+ score
+ * where 1 means "far enough that the mapping should not be trusted".
+ *
+ * Two independent components, combined by whichever is worse rather than by
+ * averaging: a translation can be large with no rotation (leaning in) and a
+ * rotation large with no translation (turning to look at someone), and either
+ * one alone invalidates the fit.
+ */
+export function headDriftScore(from: HeadPose | null, to: HeadPose | null): number | null {
+  if (!from || !to) return null
+
+  const translation = Math.hypot(
+    to.origin[0] - from.origin[0],
+    to.origin[1] - from.origin[1],
+    to.origin[2] - from.origin[2],
+  )
+
+  const dot =
+    to.vector[0] * from.vector[0] + to.vector[1] * from.vector[1] + to.vector[2] * from.vector[2]
+  const magnitude =
+    Math.hypot(...to.vector) * Math.hypot(...from.vector)
+  const angle = magnitude > 1e-6 ? Math.acos(Math.max(-1, Math.min(1, dot / magnitude))) : 0
+
+  return Math.max(translation / HEAD_DRIFT_TRANSLATION_LIMIT, angle / HEAD_DRIFT_ANGLE_LIMIT)
+}
+
+/**
+ * Translation (cm) and rotation (radians) away from the calibration pose that
+ * each count as a full unit of drift. Both are deliberately generous: normal
+ * postural sway while thinking about a position is a couple of centimetres, and
+ * we only want to speak up when the player has genuinely relocated.
+ */
+const HEAD_DRIFT_TRANSLATION_LIMIT = 7
+const HEAD_DRIFT_ANGLE_LIMIT = 0.3
 
 function applyCoefficients(coefficients: number[], row: number[]): number {
   return row.reduce((sum, value, i) => sum + value * (coefficients[i] ?? 0), 0)
@@ -258,12 +377,14 @@ export function createCalibrationSample(
   target: CalibrationTarget,
   raw: { x: number; y: number },
   boardRect: BoardRect,
+  head: HeadPose | null = null,
 ): CalibrationSample {
   return {
     target,
     raw,
     expected: targetToViewport(target, boardRect),
     collectedAt: Date.now(),
+    head,
   }
 }
 
@@ -298,39 +419,139 @@ export function applyCalibrationModel(
   }
 }
 
+/**
+ * Residual of each fit sample under a model fitted to all of them, in pixels.
+ * Used to find the target the user was not actually looking at.
+ */
+function fitResiduals(
+  samples: CalibrationSample[],
+  kind: CalibrationModel['kind'],
+  coefficientsX: number[],
+  coefficientsY: number[],
+  boardRect: BoardRect,
+): number[] {
+  return samples.map((sample) => {
+    const row = features(sample.raw, kind, boardRect)
+    return Math.hypot(
+      applyCoefficients(coefficientsX, row) - sample.expected.x,
+      applyCoefficients(coefficientsY, row) - sample.expected.y,
+    )
+  })
+}
+
+interface AffineFit {
+  coefficientsX: number[]
+  coefficientsY: number[]
+  quality: CalibrationQuality
+  samples: CalibrationSample[]
+}
+
+function fitAffine(
+  samples: CalibrationSample[],
+  validationSet: CalibrationSample[],
+  boardRect: BoardRect,
+): AffineFit | null {
+  const rows = samples.map((sample) => features(sample.raw, 'affine', boardRect))
+  const coefficientsX = fitAxis(
+    rows,
+    samples.map((sample) => sample.expected.x),
+  )
+  const coefficientsY = fitAxis(
+    rows,
+    samples.map((sample) => sample.expected.y),
+  )
+  if (!coefficientsX || !coefficientsY) return null
+  return {
+    coefficientsX,
+    coefficientsY,
+    quality: scoreSamples(validationSet, 'affine', coefficientsX, coefficientsY, boardRect),
+    samples,
+  }
+}
+
+/**
+ * Fit points below which outlier rejection stops. Three is the algebraic minimum
+ * for an affine map, but a fit that tight interpolates its own noise, so we stop
+ * well above it.
+ */
+const MIN_FIT_SAMPLES = 6
+/** A sample this many times the median residual is treated as "not looking". */
+const OUTLIER_RESIDUAL_RATIO = 2.5
+/** At most this many samples are ever discarded. */
+const MAX_OUTLIER_DROPS = 2
+
 export function buildCalibrationModel(
   fitSamples: CalibrationSample[],
   validationSamples: CalibrationSample[],
   boardRect: BoardRect,
 ): CalibrationModel | null {
-  const affineRows = fitSamples.map((sample) => features(sample.raw, 'affine', boardRect))
-  const affineX = fitAxis(
-    affineRows,
-    fitSamples.map((sample) => sample.expected.x),
-  )
-  const affineY = fitAxis(
-    affineRows,
-    fitSamples.map((sample) => sample.expected.y),
-  )
-  if (!affineX || !affineY) return null
-
   const validationSet = validationSamples.length ? validationSamples : fitSamples
-  const affineQuality = scoreSamples(validationSet, 'affine', affineX, affineY, boardRect)
-  let chosenKind: CalibrationModel['kind'] = 'affine'
-  let chosenQuality = affineQuality
 
-  if (fitSamples.length >= 12) {
-    const quadraticRows = fitSamples.map((sample) => features(sample.raw, 'quadratic', boardRect))
-    // Six features from sixteen noisy points: ridge harder than the affine fit so
-    // the curvature terms cannot chase individual samples.
+  let best = fitAffine(fitSamples, validationSet, boardRect)
+  if (!best) return null
+
+  /*
+   * Outlier rejection.
+   *
+   * Least squares gives every target equal say, so one dot the user blinked
+   * through, glanced past, or looked at while the tracker briefly lost the face
+   * drags the whole map. With nine fit points that single bad sample is an
+   * eighth of the evidence, and the result is a calibration that is subtly wrong
+   * *everywhere* rather than obviously wrong in one corner — which is the hardest
+   * kind of failure for the player to make sense of.
+   *
+   * So: find the worst-fitting sample, and if it stands well clear of the median
+   * residual, drop it and refit. The held-out validation set decides whether the
+   * drop actually helped, so this can never talk itself into a worse model.
+   */
+  let dropped = 0
+  let candidate = best
+  while (dropped < MAX_OUTLIER_DROPS && candidate.samples.length > MIN_FIT_SAMPLES) {
+    const residuals = fitResiduals(
+      candidate.samples,
+      'affine',
+      candidate.coefficientsX,
+      candidate.coefficientsY,
+      boardRect,
+    )
+    const sorted = residuals.slice().sort((a, b) => a - b)
+    const median = sorted[Math.floor(sorted.length / 2)] ?? 0
+    let worstIndex = 0
+    for (let i = 1; i < residuals.length; i++) {
+      if (residuals[i] > residuals[worstIndex]) worstIndex = i
+    }
+    if (!(median > 0) || residuals[worstIndex] < median * OUTLIER_RESIDUAL_RATIO) break
+
+    const trimmed = candidate.samples.filter((_, i) => i !== worstIndex)
+    const refit = fitAffine(trimmed, validationSet, boardRect)
+    if (!refit || !(refit.quality.validationErrorSquares < candidate.quality.validationErrorSquares)) {
+      break
+    }
+    candidate = refit
+    dropped += 1
+    if (refit.quality.validationErrorSquares < best.quality.validationErrorSquares) best = refit
+  }
+
+  let chosenKind: CalibrationModel['kind'] = 'affine'
+  let chosenQuality = best.quality
+  const chosenSamples = best.samples
+
+  /*
+   * Quadratic is only worth trying with enough points to pin down its six
+   * coefficients with room to spare. At the current grid size this never fires;
+   * it is kept for a larger grid, and the margin below means curvature has to
+   * clearly earn its place on held-out data rather than win a coin toss.
+   */
+  if (chosenSamples.length >= 12) {
+    const quadraticRows = chosenSamples.map((sample) => features(sample.raw, 'quadratic', boardRect))
     const quadraticX = fitAxis(
       quadraticRows,
-      fitSamples.map((sample) => sample.expected.x),
+      chosenSamples.map((sample) => sample.expected.x),
       1e-2,
     )
     const quadraticY = fitAxis(
       quadraticRows,
-      fitSamples.map((sample) => sample.expected.y),
+      chosenSamples.map((sample) => sample.expected.y),
       1e-2,
     )
 
@@ -344,7 +565,7 @@ export function buildCalibrationModel(
       )
       if (
         Number.isFinite(quadraticQuality.validationErrorSquares) &&
-        quadraticQuality.validationErrorSquares < affineQuality.validationErrorSquares * 0.82
+        quadraticQuality.validationErrorSquares < chosenQuality.validationErrorSquares * 0.82
       ) {
         chosenKind = 'quadratic'
         chosenQuality = quadraticQuality
@@ -352,7 +573,7 @@ export function buildCalibrationModel(
     }
   }
 
-  return fitModel(fitSamples, chosenKind, boardRect, chosenQuality)
+  return fitModel(chosenSamples, chosenKind, boardRect, chosenQuality, dropped)
 }
 
 export function saveCalibrationModel(model: CalibrationModel): void {
@@ -367,7 +588,7 @@ export function loadCalibrationModel(): CalibrationModel | null {
     if (!raw) return null
     const model = JSON.parse(raw) as CalibrationModel
     if (
-      model?.version !== 2 ||
+      model?.version !== 3 ||
       !Array.isArray(model.coefficientsX) ||
       !Array.isArray(model.coefficientsY) ||
       !model.boardRect

@@ -9,6 +9,10 @@ import EyeTrackingPanel from '@/components/eye-tracking/EyeTrackingPanel'
 import GazeCursor from '@/components/eye-tracking/GazeCursor'
 import GazeDebugOverlay from '@/components/eye-tracking/GazeDebugOverlay'
 import CalibrationOverlay from '@/components/eye-tracking/CalibrationOverlay'
+import GazeGuideOverlay, {
+  type GazeGuideReason,
+  type GazeGuideVariant,
+} from '@/components/eye-tracking/GazeGuideOverlay'
 import MoveHistoryPanel from '@/components/move-history/MoveHistoryPanel'
 import GameOverModal from '@/components/game/GameOverModal'
 import TopNav from '@/components/layout/TopNav'
@@ -33,6 +37,20 @@ import { DEFAULT_ORIENTATION, type BoardOrientation } from '@/lib/chess/orientat
  * comfortably (~90-130px), which is exactly why gaze is gated to fullscreen.
  */
 const MIN_GAZE_SQUARE_PX = 80
+
+/**
+ * Seconds of gaze control on the player's own turn without a completed move
+ * before the how-to-play card comes back. Counted only while gaze is actually
+ * driving the board, so a game left open in another tab never trips it. Long
+ * enough (45s) that thinking about a position is not mistaken for being stuck.
+ */
+const STRUGGLE_SECONDS = 45
+
+/** Blink-confirms that produced no legal move before we re-show the guide. */
+const STRUGGLE_FAILED_ATTEMPTS = 3
+
+/** Where the accessibility settings are remembered between visits. */
+const ACCESSIBILITY_STORAGE_KEY = 'armaan.chess.accessibility.v1'
 
 export default function GamePage() {
   const [gameState, setGameState] = useState<GameState>(createInitialGameState())
@@ -61,6 +79,19 @@ export default function GamePage() {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const focusMode = isFullscreen
   const [showCalibration, setShowCalibration] = useState(false)
+  /**
+   * Which instruction card is up, if any. Two of the client's notes are served
+   * here: setup instructions *before* the dots appear, and a how-to-play card
+   * *after* calibration succeeds (and again whenever the player gets stuck).
+   */
+  const [guide, setGuide] = useState<GazeGuideVariant | null>(null)
+  const [guideReason, setGuideReason] = useState<GazeGuideReason>('first-time')
+  /**
+   * Transient "that blink did nothing, and here is why" banner. Without it a
+   * failed confirm is silent, which is what "the game does not move as well as
+   * it should" feels like from the player's side of the screen.
+   */
+  const [hint, setHint] = useState<string | null>(null)
   const [debugGaze, setDebugGaze] = useState(false)
   const [calibrationProgress, setCalibrationProgress] = useState(0)
   /** Board square edge in px, polled while in gaze mode for the size gate. */
@@ -95,6 +126,26 @@ export default function GamePage() {
 
   // --- Fullscreen eye-control lifecycle ---------------------------------------
 
+  /**
+   * Seconds spent in gaze control, on the player's turn, since anything actually
+   * happened. Reset by a completed move and by dismissing an instruction card.
+   */
+  const idleSecondsRef = useRef(0)
+  /** Blink-confirms since the last completed move that produced no legal move. */
+  const failedAttemptsRef = useRef(0)
+
+  const noteProgress = useCallback(() => {
+    idleSecondsRef.current = 0
+    failedAttemptsRef.current = 0
+  }, [])
+
+  /** Re-show the how-to-play card because the player is evidently stuck. */
+  const showStruggleGuide = useCallback(() => {
+    noteProgress()
+    setGuideReason('struggling')
+    setGuide('how-to-play')
+  }, [noteProgress])
+
   const enterEyeControl = useCallback(() => {
     const el = rootRef.current
     // requestFullscreen must run inside the user gesture, before any await.
@@ -102,19 +153,28 @@ export default function GamePage() {
       el.requestFullscreen().catch(() => {})
     }
     gaze.start()
-    if (!gaze.hasCalibration) setShowCalibration(true)
-  }, [gaze])
+    noteProgress()
+    // Instructions first, dots second — the setup advice (lighting, distance,
+    // still head) is only useful before the tracker starts sampling.
+    if (!gaze.hasCalibration) {
+      setGuideReason('first-time')
+      setGuide('before-calibration')
+    }
+  }, [gaze, noteProgress])
 
   const restartCalibration = useCallback(() => {
     gaze.resetCalibration()
     setCalibrationProgress(0)
+    setShowCalibration(false)
     const el = rootRef.current
     if (el && !document.fullscreenElement) {
       el.requestFullscreen().catch(() => {})
     }
     gaze.start()
-    setShowCalibration(true)
-  }, [gaze])
+    noteProgress()
+    setGuideReason('manual')
+    setGuide('before-calibration')
+  }, [gaze, noteProgress])
 
   const exitEyeControl = useCallback(() => {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
@@ -125,7 +185,10 @@ export default function GamePage() {
     const onFs = () => {
       const fs = !!document.fullscreenElement && document.fullscreenElement === rootRef.current
       setIsFullscreen(fs)
-      if (!fs) setShowCalibration(false)
+      if (!fs) {
+        setShowCalibration(false)
+        setGuide(null)
+      }
       invalidateBoardGeometry()
     }
     document.addEventListener('fullscreenchange', onFs)
@@ -145,7 +208,8 @@ export default function GamePage() {
     return () => clearInterval(id)
   }, [isFullscreen])
 
-  // F toggles fullscreen eye control, C recalibrates, V flips the board. Reaching
+  // F toggles fullscreen eye control, C recalibrates, H re-shows the
+  // instructions, V flips the board. Reaching
   // a button is exactly the interaction a gaze user finds hardest, so the view
   // controls stay keyboard-first.
   useEffect(() => {
@@ -160,6 +224,13 @@ export default function GamePage() {
         if (isFullscreen) {
           restartCalibration()
         }
+      } else if (e.key === 'h' || e.key === 'H' || e.key === '?') {
+        // Instructions on demand — the same card the watchdog raises.
+        e.preventDefault()
+        if (isFullscreen) {
+          setGuideReason('manual')
+          setGuide('how-to-play')
+        }
       } else if (e.key === 'd' || e.key === 'D') {
         e.preventDefault()
         setDebugGaze((enabled) => !enabled)
@@ -171,6 +242,13 @@ export default function GamePage() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [enterEyeControl, exitEyeControl, isFullscreen, restartCalibration])
+
+  // The hint is a nudge, not a dialog: it clears itself.
+  useEffect(() => {
+    if (!hint) return
+    const id = setTimeout(() => setHint(null), 5000)
+    return () => clearTimeout(id)
+  }, [hint])
 
   // A live game can never be sitting on a dismissed result.
   useEffect(() => {
@@ -186,10 +264,41 @@ export default function GamePage() {
     return () => clearInterval(interval)
   }, [])
 
+  /**
+   * Accessibility settings persist and drive the palette. `highContrast` was a
+   * dead toggle until now — it flips a class on <html>, which swaps every colour
+   * token (chrome *and* board) for the high-contrast set in globals.css.
+   */
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(ACCESSIBILITY_STORAGE_KEY)
+      if (stored) {
+        setAccessibility((prev) => ({ ...prev, ...(JSON.parse(stored) as AccessibilitySettings) }))
+      }
+    } catch {
+      // Corrupt or unavailable storage just means the defaults stand.
+    }
+  }, [])
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('high-contrast', accessibility.highContrast)
+    try {
+      window.localStorage.setItem(ACCESSIBILITY_STORAGE_KEY, JSON.stringify(accessibility))
+    } catch {
+      // Non-fatal: the setting still applies for this session.
+    }
+  }, [accessibility])
+
   // Push the smoothing setting into the tracker whenever it changes.
   useEffect(() => {
     if (gaze.isReady) gaze.setSmoothing(accessibility.smoothing / 100)
   }, [gaze.isReady, accessibility.smoothing, gaze.setSmoothing])
+
+  // Blink sensitivity was a settings control wired to nothing; it now sets how
+  // long and how firmly the eyes must close before a blink counts as a confirm.
+  useEffect(() => {
+    gaze.setBlinkSensitivity(accessibility.blinkSensitivity)
+  }, [accessibility.blinkSensitivity, gaze.setBlinkSensitivity])
 
   // When it becomes Black's turn, ask the backend Stockfish for its move.
   const requestedForMoveCount = useRef(-1)
@@ -224,6 +333,10 @@ export default function GamePage() {
     }
   }, [gameState, difficulty])
 
+  /** Latest board state, read by handlers that must branch on it before setting. */
+  const gameStateRef = useRef(gameState)
+  gameStateRef.current = gameState
+
   // Gaze dwell selects a piece; a deliberate blink confirms the move.
   const handleGazeDwell = (pos: BoardPosition) => {
     if (!isHumanTurn) return
@@ -241,13 +354,33 @@ export default function GamePage() {
     })
   }
 
+  /**
+   * Blink confirm. The legality check runs outside the state updater so a blink
+   * that lands on nothing (no piece selected, or an illegal destination) can be
+   * counted: three of those in a row is the "user is failing to move a piece"
+   * signal that brings the instructions back.
+   */
   const handleBlinkConfirm = (pos: BoardPosition | null) => {
     if (!pos || !isHumanTurn) return
-    setGameState((prev) => {
-      if (!prev.selectedSquare) return prev
-      const next = makeMove(prev, prev.selectedSquare, pos)
-      return next ?? prev
-    })
+    const current = gameStateRef.current
+    const next = current.selectedSquare
+      ? makeMove(current, current.selectedSquare, pos)
+      : null
+
+    if (!next) {
+      failedAttemptsRef.current += 1
+      setHint(
+        current.selectedSquare
+          ? 'That square is not a legal move for the selected piece — look at a highlighted square, then blink.'
+          : 'No piece selected yet — hold your gaze on one of your own pieces until the ring fills, then blink.',
+      )
+      if (failedAttemptsRef.current >= STRUGGLE_FAILED_ATTEMPTS) showStruggleGuide()
+      return
+    }
+
+    setHint(null)
+    setGameState(next)
+    noteProgress()
   }
 
   // Gaze control requires: the tracker up, enough calibration collected, real
@@ -255,7 +388,37 @@ export default function GamePage() {
   // overlay in progress. Any of these missing leaves the game mouse-only.
   const boardBigEnough = squareSize >= MIN_GAZE_SQUARE_PX
   const gazeControlReady =
-    gaze.isReady && gaze.hasCalibration && isFullscreen && boardBigEnough && !showCalibration
+    gaze.isReady &&
+    gaze.hasCalibration &&
+    isFullscreen &&
+    boardBigEnough &&
+    !showCalibration &&
+    !guide
+
+  /**
+   * Sticky "the head has moved" flag. The drift score is noisy frame to frame,
+   * so it latches on at 1 and only clears once the player is well back inside
+   * the pose the model was fitted at — a banner that blinks on and off is worse
+   * than no banner.
+   */
+  const [headMoved, setHeadMoved] = useState(false)
+  useEffect(() => {
+    const drift = gaze.headDrift
+    if (drift === null) return
+    setHeadMoved((was) => (was ? drift > 0.6 : drift >= 1))
+  }, [gaze.headDrift])
+
+  // "Spends too long attempting to move" watchdog. Time is accumulated only
+  // while gaze is genuinely driving the board on the player's own turn, so
+  // thinking time during the engine's reply, or a tab left open, never counts.
+  useEffect(() => {
+    if (!gazeControlReady || !isHumanTurn) return
+    const id = setInterval(() => {
+      idleSecondsRef.current += 1
+      if (idleSecondsRef.current >= STRUGGLE_SECONDS) showStruggleGuide()
+    }, 1000)
+    return () => clearInterval(id)
+  }, [gazeControlReady, isHumanTurn, showStruggleGuide])
 
   const {
     rawSquare,
@@ -278,6 +441,8 @@ export default function GamePage() {
   // Mouse fallback: click to select, click again to move.
   const handleSquareClick = (row: number, col: number) => {
     if (!isHumanTurn) return
+    // Reaching for the mouse is not being stuck, so it clears the watchdog.
+    noteProgress()
     setGameState((prev) => {
       const selectedSquare = prev.selectedSquare
       const clickedPiece = getPieceAt(prev.board, row, col)
@@ -381,10 +546,31 @@ export default function GamePage() {
         onBoard={gazeOnBoard}
       />
 
+      {/* Setup instructions before the dots, and how-to-play after them. */}
+      <GazeGuideOverlay
+        open={isFullscreen && guide !== null}
+        variant={guide ?? 'how-to-play'}
+        reason={guideReason}
+        onContinue={() => {
+          const current = guide
+          setGuide(null)
+          noteProgress()
+          if (current === 'before-calibration') setShowCalibration(true)
+        }}
+        onRecalibrate={restartCalibration}
+        onCancel={() => {
+          setGuide(null)
+          exitEyeControl()
+        }}
+      />
+
       {/* Calibration overlay (only in gaze mode, until calibrated). */}
       {isFullscreen && showCalibration && (
         <CalibrationOverlay
           rawGazePointRef={gaze.rawGazePointRef}
+          headPoseRef={gaze.headPoseRef}
+          feedAdaptationPoint={gaze.feedAdaptationPoint}
+          ownsAdaptationRef={gaze.ownsAdaptationRef}
           onProgress={(completed, total) => {
             setCalibrationProgress((completed / total) * 100)
           }}
@@ -392,11 +578,33 @@ export default function GamePage() {
             gaze.setCalibrationModel(model)
             setCalibrationProgress(100)
             setShowCalibration(false)
+            // The client's second note: explain how to actually play, once the
+            // eyes are calibrated and before the first move is attempted.
+            noteProgress()
+            setGuideReason('first-time')
+            setGuide('how-to-play')
           }}
           onCancel={() => {
             setShowCalibration(false)
           }}
         />
+      )}
+
+      {/* Why the last blink did nothing. Bright and large — it is read from
+          across the room, mid-game, by someone who cannot use a mouse. */}
+      {isFullscreen && hint && !guide && !showCalibration && boardBigEnough && (
+        <div className="fixed top-4 left-1/2 z-[66] w-[min(92vw,42rem)] -translate-x-1/2 rounded-xl border-2 border-[#ffd24a] bg-[#0d1117] px-5 py-3 text-center text-lg font-semibold text-[#ffd24a] shadow-lg">
+          {hint}
+        </div>
+      )}
+
+      {/* Head has left the pose calibration was collected at. The mapping cannot
+          be repaired without new ground truth, so say so plainly instead of
+          letting the board quietly stop obeying. */}
+      {isFullscreen && !guide && !showCalibration && gazeControlReady && headMoved && (
+        <div className="fixed bottom-24 left-1/2 z-[66] w-[min(92vw,42rem)] -translate-x-1/2 rounded-xl border-2 border-[#ff9d42] bg-[#0d1117] px-5 py-3 text-center text-lg font-semibold text-[#ff9d42] shadow-lg">
+          You have moved since calibrating — sit back where you were, or press C to recalibrate.
+        </div>
       )}
 
       {/* "Board too small for gaze" nudge — rare, since fullscreen clears the bar. */}

@@ -18,6 +18,7 @@ export const createInitialEyeTrackingState = (): EyeTrackingState => {
     calibrationErrorSquares: 0,
     trackingIssue: null,
     cameraPermission: 'granted',
+    headDrift: null,
   }
 }
 

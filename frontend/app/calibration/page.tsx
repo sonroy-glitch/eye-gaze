@@ -2,7 +2,7 @@
 
 import { motion } from 'framer-motion'
 import Link from 'next/link'
-import { Eye, ArrowLeft, Maximize2, MousePointerClick, Sparkles } from 'lucide-react'
+import { Eye, ArrowLeft, Lightbulb, Maximize2, MousePointerClick, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 /**
@@ -43,9 +43,9 @@ export default function CalibrationInfoPage() {
         </div>
         <div className="space-y-2">
           <h1 className="text-3xl font-bold text-foreground">Calibration is now in the game</h1>
-          <p className="text-muted-foreground">
-            Eye tracking calibrates itself while you play — no separate setup step.
-            Start eye control on the game board and follow the dots.
+          <p className="text-lg text-foreground/90">
+            Eye tracking is set up inside the game — no separate step. It takes about seventeen
+            seconds: a short instructions card, eighteen dots, and you are playing.
           </p>
         </div>
 
@@ -56,15 +56,23 @@ export default function CalibrationInfoPage() {
             the fullscreen button. The board fills the screen so squares are large enough to pick by
             eye.
           </Step>
-          <Step icon={<MousePointerClick className="w-5 h-5 text-primary" />} title="Look and click the dots">
-            A short grid of dots appears over the board. Look straight at each one and click it —
-            that teaches the tracker where your eyes point.
+          <Step icon={<Lightbulb className="w-5 h-5 text-primary" />} title="Get the light and your seat right first">
+            Light on your face, not behind you. Sit about an arm's length from the screen, centred
+            on the camera, and keep your head still — the game shows you this checklist before the
+            dots start.
           </Step>
-          <Step icon={<Sparkles className="w-5 h-5 text-primary" />} title="It keeps improving">
-            Every move you click afterwards is another look-aligned sample, so accuracy climbs the
-            more you play. Press{' '}
-            <kbd className="px-1 py-0.5 rounded border border-border bg-muted font-mono">C</kbd> any
-            time to recalibrate.
+          <Step icon={<MousePointerClick className="w-5 h-5 text-primary" />} title="Look at the dots">
+            Eighteen dots appear over the board, roughly a second each. The first five teach the
+            tracker itself where your eyes point; the rest fit the board to them. Look straight at
+            each one and hold until it moves on.
+          </Step>
+          <Step icon={<Sparkles className="w-5 h-5 text-primary" />} title="Then it explains how to play">
+            When calibration finishes you get the three steps — look to select, look to target,
+            blink to confirm — and they come back automatically if a move will not land. Press{' '}
+            <kbd className="px-1 py-0.5 rounded border border-border bg-muted font-mono">H</kbd> for
+            them any time, or{' '}
+            <kbd className="px-1 py-0.5 rounded border border-border bg-muted font-mono">C</kbd> to
+            recalibrate.
           </Step>
         </div>
 
@@ -73,7 +81,7 @@ export default function CalibrationInfoPage() {
             Go to the game
           </Button>
         </Link>
-        <p className="text-xs text-muted-foreground">Your camera turns on only in eye control. Video never leaves this device.</p>
+        <p className="text-sm text-muted-foreground">Your camera turns on only in eye control. Video never leaves this device.</p>
       </motion.div>
     </div>
   )

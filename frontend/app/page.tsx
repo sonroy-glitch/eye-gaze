@@ -13,6 +13,7 @@ import {
   Heart,
   Info,
   Keyboard,
+  Lightbulb,
   Play,
   ShieldCheck,
   SlidersHorizontal,
@@ -32,10 +33,42 @@ const HERO_POINTS = [
 ]
 
 const STEPS = [
-  { icon: Eye, title: '1. Look', copy: 'Gaze at a piece for 1.5 seconds to select it.' },
-  { icon: Crosshair, title: '2. Gaze', copy: 'Look at the destination square to move.' },
-  { icon: Zap, title: '3. Blink', copy: 'Blink deliberately to confirm your move.' },
-  { icon: Brain, title: '4. Play', copy: 'The game validates your move and continues.' },
+  {
+    icon: Camera,
+    title: '1. Calibrate',
+    copy: 'Eighteen dots, about seventeen seconds. Look at each one; the game learns where your eyes point.',
+  },
+  { icon: Eye, title: '2. Look', copy: 'Hold your gaze on a piece for about a second to select it.' },
+  { icon: Crosshair, title: '3. Gaze', copy: 'Hold your gaze on the square you want to move to.' },
+  { icon: Zap, title: '4. Blink', copy: 'One deliberate, half-second blink confirms the move.' },
+]
+
+/**
+ * The set-up checklist the client asked for: it has to be readable *before*
+ * anyone opens the game, because every item on it is something you cannot fix
+ * once calibration has already started.
+ */
+const BEFORE_YOU_START = [
+  {
+    icon: Camera,
+    title: 'Allow the camera when the browser asks',
+    copy: 'Video is processed on your own device and never uploaded. Nothing turns on until you enter eye control.',
+  },
+  {
+    icon: Lightbulb,
+    title: 'Light your face from the front',
+    copy: 'A window or lamp facing you. A bright window behind you makes your face a silhouette, and tracking will not work.',
+  },
+  {
+    icon: Gauge,
+    title: 'Sit an arm’s length away and stay put',
+    copy: 'Centre yourself on the camera. Calibration learns one head position — if you shift, press C to redo it.',
+  },
+  {
+    icon: Keyboard,
+    title: 'Learn three keys',
+    copy: 'F enters full-screen eye control, C recalibrates, Esc leaves. The mouse keeps working the whole time.',
+  },
 ]
 
 const FEATURES = [
@@ -316,6 +349,41 @@ export default function Home() {
                 <span className="min-w-0">
                   <span className="block font-semibold text-primary">{title}</span>
                   <span className="block text-sm leading-relaxed text-muted-foreground">{copy}</span>
+                </span>
+              </motion.li>
+            ))}
+          </motion.ol>
+        </motion.div>
+      </section>
+
+      {/* ------------------------------------------------- Before you start */}
+      <section id="before-you-start" className="mx-auto max-w-7xl scroll-mt-24 px-5 pb-16 lg:px-8">
+        <motion.div
+          variants={stagger}
+          initial="hidden"
+          whileInView="show"
+          viewport={{ once: true, amount: 0.2 }}
+          className="rounded-2xl border-2 border-primary/60 bg-primary/[0.06] p-8"
+        >
+          <motion.div variants={fadeUp} className="max-w-2xl">
+            <h2 className="text-3xl font-bold tracking-tight text-foreground">
+              Before you start
+            </h2>
+            <p className="mt-2 text-lg text-foreground/90">
+              Four things to get right first. They take a minute, and they are the difference
+              between calibrating once and calibrating three times.
+            </p>
+          </motion.div>
+
+          <motion.ol variants={stagger} className="mt-8 grid gap-6 sm:grid-cols-2">
+            {BEFORE_YOU_START.map(({ icon: Icon, title, copy }) => (
+              <motion.li key={title} variants={fadeUp} className="flex gap-4">
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+                  <Icon className="h-6 w-6" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-lg font-bold text-foreground">{title}</span>
+                  <span className="block text-base leading-relaxed text-foreground/80">{copy}</span>
                 </span>
               </motion.li>
             ))}

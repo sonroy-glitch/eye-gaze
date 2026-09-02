@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
+  ADAPTATION_TARGETS,
   buildCalibrationModel,
   CALIBRATION_TARGETS,
   createCalibrationSample,
@@ -16,12 +17,24 @@ import {
   type CalibrationTarget,
 } from '@/lib/eye-tracking/calibration-model'
 import { getBoardGeometry, invalidateBoardGeometry, toBoardRect } from '@/lib/eye-tracking/board-mapping'
-import type { GazePoint } from '@/lib/eye-tracking/types'
+import type { GazePoint, HeadPose } from '@/lib/eye-tracking/types'
 
-const SETTLE_MS = 350
-const SAMPLE_MS = 850
+/**
+ * Per-target timing. Trimmed alongside the smaller dot grid: the settle window
+ * only has to cover the saccade onto the new dot, and 550ms of sampling at 45ms
+ * still yields ~12 frames to take a robust median over. Thirteen targets now run
+ * ~12s end to end instead of ~26s.
+ */
+const SETTLE_MS = 220
+const SAMPLE_MS = 550
+/**
+ * The adaptation phase is paced by WebEyeTrack, not by us: it drops any ground
+ * truth point offered within 1s of the previous one, so each dot has to stay up
+ * long enough to clear that. The extra time is not wasted — it is all sampling.
+ */
+const ADAPT_SAMPLE_MS = 950
 const SAMPLE_EVERY_MS = 45
-const MIN_SAMPLES_PER_TARGET = 8
+const MIN_SAMPLES_PER_TARGET = 6
 /** A click still collects for this long, so a target is never fitted to one frame. */
 const CLICK_BURST_MS = 220
 const CLICK_MIN_SAMPLES = 2
@@ -29,6 +42,12 @@ const CLICK_MIN_SAMPLES = 2
 interface CalibrationOverlayProps {
   /** Live raw WebEyeTrack viewport point, read without causing React renders. */
   rawGazePointRef: React.RefObject<GazePoint>
+  /** Live head pose, recorded with each sample so the model knows its own pose. */
+  headPoseRef?: React.RefObject<HeadPose | null>
+  /** Hand one look-aligned point to WebEyeTrack's own on-device adaptation. */
+  feedAdaptationPoint?: (x: number, y: number) => boolean
+  /** False when the adaptation hook could not be taken over; skips that phase. */
+  ownsAdaptationRef?: React.RefObject<boolean>
   /** Calibration model built from the collected board-specific samples. */
   onComplete: (model: CalibrationModel) => void
   /** Progress for the status panel. */
@@ -53,11 +72,18 @@ function rectForCurrentBoard() {
 
 export default function CalibrationOverlay({
   rawGazePointRef,
+  headPoseRef,
+  feedAdaptationPoint,
+  ownsAdaptationRef,
   onComplete,
   onProgress,
   onCancel,
 }: CalibrationOverlayProps) {
+  /** Whether the tracker's own adaptation can be taught; decided once, on mount. */
+  const canAdaptRef = useRef<boolean>(!!feedAdaptationPoint && ownsAdaptationRef?.current !== false)
   const fitSamplesRef = useRef<CalibrationSample[]>([])
+  /** Adaptation dots successfully handed to the tracker. */
+  const adaptedCountRef = useRef(0)
   const validationSamplesRef = useRef<CalibrationSample[]>([])
   /**
    * The parent re-renders ~20x/second while the tracker streams gaze results, so
@@ -69,7 +95,9 @@ export default function CalibrationOverlay({
   const onProgressRef = useRef(onProgress)
   const onCompleteRef = useRef(onComplete)
   const onCancelRef = useRef(onCancel)
-  const [phase, setPhase] = useState<CalibrationPhase>('collecting')
+  const [phase, setPhase] = useState<CalibrationPhase>(
+    !!feedAdaptationPoint && ownsAdaptationRef?.current !== false ? 'adapting' : 'collecting',
+  )
   const [index, setIndex] = useState(0)
   const [retryKey, setRetryKey] = useState(0)
   const [sampling, setSampling] = useState(false)
@@ -81,10 +109,19 @@ export default function CalibrationOverlay({
   const [rejectedModel, setRejectedModel] = useState<CalibrationModel | null>(null)
   /** Set while a target is live: captures it immediately (click / Space). */
   const finishRef = useRef<(() => void) | null>(null)
+  /** Current phase, readable from the window-level handlers below. */
+  const phaseRef = useRef<CalibrationPhase>('collecting')
 
-  const targets = phase === 'validating' ? VALIDATION_TARGETS_ON_BOARD : CALIBRATION_TARGETS
-  const total = CALIBRATION_TARGETS.length + VALIDATION_TARGETS_ON_BOARD.length
+  const targets =
+    phase === 'adapting'
+      ? ADAPTATION_TARGETS
+      : phase === 'validating'
+        ? VALIDATION_TARGETS_ON_BOARD
+        : CALIBRATION_TARGETS
+  const adaptTotal = canAdaptRef.current ? ADAPTATION_TARGETS.length : 0
+  const total = adaptTotal + CALIBRATION_TARGETS.length + VALIDATION_TARGETS_ON_BOARD.length
   const completed =
+    adaptedCountRef.current +
     fitSamplesRef.current.length +
     validationSamplesRef.current.length +
     (sampling ? 0.5 : 0)
@@ -94,6 +131,7 @@ export default function CalibrationOverlay({
     [displayTarget, index, layoutTick, phase],
   )
 
+  phaseRef.current = phase
   onProgressRef.current = onProgress
   onCompleteRef.current = onComplete
   onCancelRef.current = onCancel
@@ -116,12 +154,16 @@ export default function CalibrationOverlay({
   const restart = useCallback(() => {
     fitSamplesRef.current = []
     validationSamplesRef.current = []
+    // Adaptation is not repeated: it has already moved the tracker's own model,
+    // and re-teaching the same five points would only re-confirm what it learned
+    // while costing the user another six seconds. A retry refits our layer.
+    adaptedCountRef.current = adaptTotal
     setRejectedModel(null)
     setSampling(false)
     setIndex(0)
     setPhase('collecting')
     setMessage('Look at the target')
-  }, [])
+  }, [adaptTotal])
 
   const acceptRejected = useCallback(() => {
     if (rejectedModel) onCompleteRef.current(rejectedModel)
@@ -163,7 +205,9 @@ export default function CalibrationOverlay({
           actionsRef.current.acceptRejected()
           break
         default:
-          finishRef.current?.()
+          // In the adaptation phase the dot is paced by the library's own
+          // debounce, so a click cannot usefully shorten it.
+          if (phaseRef.current !== 'adapting') finishRef.current?.()
       }
     }
     window.addEventListener('click', onWindowClick, true)
@@ -178,12 +222,12 @@ export default function CalibrationOverlay({
         return false
       }
 
-      const sample = createCalibrationSample(target, raw, boardRect)
+      const sample = createCalibrationSample(target, raw, boardRect, headPoseRef?.current ?? null)
       if (phase === 'validating') validationSamplesRef.current.push(sample)
       else fitSamplesRef.current.push(sample)
       return true
     },
-    [phase],
+    [phase, headPoseRef],
   )
 
   useEffect(() => {
@@ -196,7 +240,13 @@ export default function CalibrationOverlay({
     const points: Array<{ x: number; y: number }> = []
 
     setSampling(false)
-    setMessage(phase === 'validating' ? 'Validation target' : 'Look at the target')
+    setMessage(
+      phase === 'adapting'
+        ? 'Teaching the tracker your eyes'
+        : phase === 'validating'
+          ? 'Checking the result'
+          : 'Look at the target',
+    )
 
     const retry = (delay: number) => {
       setTimeout(() => {
@@ -233,6 +283,35 @@ export default function CalibrationOverlay({
             : 'Tracking was unstable. Trying this target again.',
         )
         retry(450)
+        return
+      }
+
+      if (phase === 'adapting') {
+        /*
+         * Hand this dot to WebEyeTrack's own adaptation rather than to our
+         * regression. The library refuses points offered too soon after the last
+         * one, so a refusal is a pacing problem, not a bad sample: wait out its
+         * debounce and offer the same dot again rather than moving on and
+         * quietly teaching it four points instead of five.
+         */
+        const dotPoint = resolve(displayTarget)
+        const accepted = feedAdaptationPoint?.(dotPoint.x, dotPoint.y) ?? false
+        if (!accepted) {
+          setMessage('Hold it there a moment longer…')
+          retry(400)
+          return
+        }
+        adaptedCountRef.current += 1
+
+        const nextAdapt = index + 1
+        if (nextAdapt < targets.length) {
+          setIndex(nextAdapt)
+          return
+        }
+        // The adaptation has just changed the mapping the raw stream comes out
+        // of, so everything sampled from here is measured against the new base.
+        setPhase('collecting')
+        setIndex(0)
         return
       }
 
@@ -296,9 +375,16 @@ export default function CalibrationOverlay({
     settleTimer = setTimeout(() => {
       if (cancelled) return
       setSampling(true)
-      setMessage('Hold your gaze (or click / press Space)')
+      setMessage(
+        phase === 'adapting'
+          ? 'Hold your gaze on the dot'
+          : 'Hold your gaze (or click / press Space)',
+      )
       interval = setInterval(collect, SAMPLE_EVERY_MS)
-      finishTimer = setTimeout(() => commit(MIN_SAMPLES_PER_TARGET), SAMPLE_MS)
+      finishTimer = setTimeout(
+        () => commit(MIN_SAMPLES_PER_TARGET),
+        phase === 'adapting' ? ADAPT_SAMPLE_MS : SAMPLE_MS,
+      )
     }, SETTLE_MS)
 
     /**
@@ -327,7 +413,16 @@ export default function CalibrationOverlay({
       if (finishTimer) clearTimeout(finishTimer)
       if (interval) clearInterval(interval)
     }
-  }, [displayTarget, index, phase, rawGazePointRef, retryKey, storeTarget, targets.length])
+  }, [
+    displayTarget,
+    feedAdaptationPoint,
+    index,
+    phase,
+    rawGazePointRef,
+    retryKey,
+    storeTarget,
+    targets.length,
+  ])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -335,7 +430,7 @@ export default function CalibrationOverlay({
       if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault()
         if (phase === 'low-quality') restart()
-        else finishRef.current?.()
+        else if (phase !== 'adapting') finishRef.current?.()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -343,34 +438,40 @@ export default function CalibrationOverlay({
   }, [phase, restart])
 
   const progress = total ? (completed / total) * 100 : 0
-  const phaseLabel = phase === 'validating' ? 'Validation' : 'Calibration'
+  const phaseLabel =
+    phase === 'adapting' ? 'Learning your eyes' : phase === 'validating' ? 'Checking' : 'Calibration'
   const currentNumber =
-    phase === 'validating'
-      ? CALIBRATION_TARGETS.length + index + 1
-      : index + 1
+    phase === 'adapting'
+      ? index + 1
+      : phase === 'validating'
+        ? adaptTotal + CALIBRATION_TARGETS.length + index + 1
+        : adaptTotal + index + 1
 
   return (
     <div className="fixed inset-0 z-[70]">
-      <div className="absolute inset-0 bg-background/85 backdrop-blur-sm" />
+      <div className="absolute inset-0 bg-[#05070a]/90 backdrop-blur-sm" />
 
-      <div className="absolute top-6 left-1/2 z-10 w-[min(92vw,28rem)] -translate-x-1/2 text-center space-y-3 px-4 pointer-events-none">
-        <h2 className="text-2xl font-bold text-foreground">{phaseLabel}</h2>
-        <p className="text-sm text-muted-foreground">
-          {message}
-        </p>
+      {/* Bright, large type throughout: this is read at arm's length, often by
+          someone who cannot comfortably read 12px grey-on-grey. */}
+      <div className="absolute top-6 left-1/2 z-10 w-[min(94vw,34rem)] -translate-x-1/2 text-center space-y-3 px-4 pointer-events-none">
+        <h2 className="text-3xl font-extrabold tracking-tight text-white">{phaseLabel}</h2>
+        <p className="text-xl font-semibold text-[#ffd24a]">{message}</p>
         {phase !== 'low-quality' && (
           <>
-            <p className="text-xs text-muted-foreground/80">
-              {phaseLabel} {Math.min(currentNumber, total)}/{total}
+            <p className="text-lg font-bold text-white">
+              Dot {Math.min(currentNumber, total)} of {total}
             </p>
-            <p className={`text-xs ${hasSignal ? 'text-muted-foreground/70' : 'text-yellow-400'}`}>
+            <p className="text-base text-[#e8eef7]">
+              Head still — move only your eyes.
+            </p>
+            <p className={`text-base ${hasSignal ? 'text-[#7fd4ff]' : 'text-[#ff9d42] font-bold'}`}>
               {hasSignal
                 ? 'Tracking live — look at the dot, or click it to capture now'
                 : 'Waiting for the eye tracker… (camera on? face in frame?)'}
             </p>
-            <div className="mx-auto h-1 w-full rounded-full bg-muted overflow-hidden">
+            <div className="mx-auto h-2 w-full rounded-full bg-white/20 overflow-hidden">
               <motion.div
-                className="h-full bg-primary"
+                className="h-full bg-[#ffd24a]"
                 initial={false}
                 animate={{ width: `${progress}%` }}
                 transition={{ duration: 0.2 }}
@@ -393,12 +494,12 @@ export default function CalibrationOverlay({
           >
             <span className="relative flex items-center justify-center">
               <motion.span
-                animate={{ scale: sampling ? [1, 1.35] : [1, 1.7], opacity: [0.8, 0] }}
-                transition={{ duration: sampling ? 0.55 : 1.2, repeat: Infinity }}
-                className="absolute w-14 h-14 rounded-full border-2 border-primary"
+                animate={{ scale: sampling ? [1, 1.35] : [1, 1.7], opacity: [0.9, 0] }}
+                transition={{ duration: sampling ? 0.45 : 1.1, repeat: Infinity }}
+                className="absolute w-20 h-20 rounded-full border-4 border-[#ffd24a]"
               />
-              <span className="block w-7 h-7 rounded-full bg-primary shadow-lg shadow-primary/50" />
-              <span className="absolute block w-2 h-2 rounded-full bg-primary-foreground" />
+              <span className="block w-9 h-9 rounded-full bg-[#ffd24a] shadow-[0_0_28px_rgba(255,210,74,0.8)]" />
+              <span className="absolute block w-2.5 h-2.5 rounded-full bg-[#0d1117]" />
             </span>
           </motion.div>
         )}
@@ -411,7 +512,7 @@ export default function CalibrationOverlay({
           <button
             type="button"
             data-calibration-action="restart"
-            className="w-full rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
+            className="w-full rounded-xl bg-[#ffd24a] px-6 py-4 text-lg font-extrabold text-[#0d1117]"
           >
             Try again
           </button>
@@ -419,7 +520,7 @@ export default function CalibrationOverlay({
             <button
               type="button"
               data-calibration-action="accept"
-              className="w-full rounded-md border border-border bg-card/90 px-4 py-2 text-sm text-foreground"
+              className="w-full rounded-xl border-2 border-[#7fd4ff] px-6 py-4 text-lg font-bold text-[#7fd4ff]"
             >
               Use it anyway
             </button>
@@ -430,9 +531,9 @@ export default function CalibrationOverlay({
       <button
         type="button"
         data-calibration-action="cancel"
-        className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 rounded-md border border-border bg-card/90 px-3 py-2 text-xs text-muted-foreground hover:text-foreground"
+        className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 rounded-lg border-2 border-white/60 bg-[#0d1117] px-5 py-3 text-base font-semibold text-white hover:bg-white/10"
       >
-        Cancel calibration
+        Cancel calibration (Esc)
       </button>
     </div>
   )

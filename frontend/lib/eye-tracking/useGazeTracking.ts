@@ -1,14 +1,17 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { WebEyeTrackSource } from './webeyetrack-source'
-import type { EyeTrackingState, GazePoint, TrackingStatus } from './types'
+import { WebEyeTrackSource, type BlinkSensitivity } from './webeyetrack-source'
+import { OneEuroFilter2D, smoothingToMinCutoff } from './one-euro'
+import type { EyeTrackingState, GazeFrame, GazePoint, HeadPose, TrackingStatus } from './types'
 import {
   applyCalibrationModel,
+  headDriftScore,
   isLowQualityModel,
   clearCalibrationModel,
   loadCalibrationModel,
   saveCalibrationModel,
+  CALIBRATION_TARGETS,
   type CalibrationModel,
 } from './calibration-model'
 import { getBoardGeometry, remapForBoard } from './board-mapping'
@@ -20,7 +23,7 @@ const FACE_LOST_MS = 1000
  * Board-specific gaze samples needed before square selection is trusted. Fewer
  * points cannot fit a stable chessboard correction over all 64 squares.
  */
-const MIN_CALIBRATION_SAMPLES = 16
+const MIN_CALIBRATION_SAMPLES = CALIBRATION_TARGETS.length
 const STATE_COMMIT_MS = 50
 
 export interface UseGazeTracking {
@@ -52,6 +55,25 @@ export interface UseGazeTracking {
   onBlink: (cb: () => void) => () => void
   /** Set cursor smoothing strength, 0 (responsive) .. 1 (very steady). */
   setSmoothing: (strength: number) => void
+  /** How hard a blink has to be before it counts as a confirm. */
+  setBlinkSensitivity: (sensitivity: BlinkSensitivity) => void
+  /**
+   * Teach the tracker's own on-device model one point the user was demonstrably
+   * looking at, in viewport pixels. Returns false when the library declined it
+   * (it drops points inside 1s or 0.05 normalised units of the previous one).
+   * Calibration only — see `feedAdaptationPoint` in the source for why.
+   */
+  feedAdaptationPoint: (x: number, y: number) => boolean
+  /**
+   * Whether we hold the library's click-adaptation hook. False means the package
+   * changed shape under us and the adaptation phase must be skipped rather than
+   * shown as a row of dots that teach nothing.
+   */
+  ownsAdaptationRef: React.RefObject<boolean>
+  /** Live head pose, so calibration can record the pose it was fitted at. */
+  headPoseRef: React.RefObject<HeadPose | null>
+  /** 0..1+ how far the head has moved since calibration; null when unknown. */
+  headDrift: number | null
 }
 
 export function useGazeTracking(): UseGazeTracking {
@@ -61,9 +83,22 @@ export function useGazeTracking(): UseGazeTracking {
   const calibrationModelRef = useRef<CalibrationModel | null>(null)
   const calibrationSampleCountRef = useRef(0)
   const smoothingStrengthRef = useRef(0.7)
+  const blinkSensitivityRef = useRef<BlinkSensitivity>('medium')
   const rawGazePointRef = useRef<GazePoint>({ x: 0, y: 0, confidence: 0 })
   const correctedGazePointRef = useRef<GazePoint>({ x: 0, y: 0, confidence: 0 })
-  const smoothedPointRef = useRef<{ x: number; y: number } | null>(null)
+  /**
+   * Velocity-adaptive smoothing. Replaces the fixed-alpha EMA, which had to pick
+   * one compromise between jitter while fixating and lag across a saccade; see
+   * `one-euro.ts` for why that trade is avoidable.
+   */
+  const filterRef = useRef<OneEuroFilter2D | null>(null)
+  if (!filterRef.current) {
+    filterRef.current = new OneEuroFilter2D({ minCutoff: smoothingToMinCutoff(0.7) })
+  }
+  /** Latest head pose, for drift against the pose the model was fitted at. */
+  const headRef = useRef<HeadPose | null>(null)
+  const headDriftRef = useRef<number | null>(null)
+  const ownsAdaptationRef = useRef(false)
   const lastStateCommitAtRef = useRef(0)
 
   const blinkSubscribers = useRef<Set<() => void>>(new Set())
@@ -89,6 +124,7 @@ export function useGazeTracking(): UseGazeTracking {
     calibrationErrorSquares: null,
     trackingIssue: 'webeyetrack-not-initialized',
     cameraPermission: 'prompt',
+    headDrift: null,
   })
 
   useEffect(() => {
@@ -126,7 +162,7 @@ export function useGazeTracking(): UseGazeTracking {
   const setCalibrationModel = useCallback((model: CalibrationModel) => {
     calibrationModelRef.current = model
     calibrationSampleCountRef.current = model.sampleCount
-    smoothedPointRef.current = null
+    filterRef.current?.reset()
     saveCalibrationModel(model)
     setCalibrationModelState(model)
     setCalibrationSampleCount(model.sampleCount)
@@ -146,7 +182,7 @@ export function useGazeTracking(): UseGazeTracking {
     clearCalibrationModel()
     calibrationModelRef.current = null
     calibrationSampleCountRef.current = 0
-    smoothedPointRef.current = null
+    filterRef.current?.reset()
     setCalibrationModelState(null)
     setCalibrationSampleCount(0)
     setState((prev) => ({
@@ -160,8 +196,23 @@ export function useGazeTracking(): UseGazeTracking {
   }, [])
 
   const setSmoothing = useCallback((strength: number) => {
-    smoothingStrengthRef.current = Math.max(0, Math.min(1, strength))
-    sourceRef.current?.setSmoothing(strength)
+    const clamped = Math.max(0, Math.min(1, strength))
+    smoothingStrengthRef.current = clamped
+    filterRef.current?.configure({ minCutoff: smoothingToMinCutoff(clamped) })
+  }, [])
+
+  const setBlinkSensitivity = useCallback((sensitivity: BlinkSensitivity) => {
+    blinkSensitivityRef.current = sensitivity
+    sourceRef.current?.setBlinkSensitivity(sensitivity)
+  }, [])
+
+  /**
+   * Hand the tracker's own on-device adaptation one point the user was verifiably
+   * looking at. Only the calibration overlay calls this — see the note on
+   * `feedAdaptationPoint` for why nothing else may.
+   */
+  const feedAdaptationPoint = useCallback((x: number, y: number) => {
+    return sourceRef.current?.feedAdaptationPoint(x, y) ?? false
   }, [])
 
   const start = useCallback(async () => {
@@ -177,24 +228,32 @@ export function useGazeTracking(): UseGazeTracking {
     }))
 
     const source = new WebEyeTrackSource(video, {
-      onPoint: (point: GazePoint) => {
+      onFrame: (frame: GazeFrame) => {
         const now = performance.now()
+        const point = frame.point
         rawGazePointRef.current = point
+        headRef.current = frame.head
 
         const model = calibrationModelRef.current
         const geometry = getBoardGeometry(now)
         const modelCorrected = applyCalibrationModel(model, point)
         const boardCorrected = remapForBoard(modelCorrected, model?.boardRect ?? null, geometry)
-        const strength = smoothingStrengthRef.current
-        const alpha = 0.62 - 0.5 * strength
-        const last = smoothedPointRef.current
-        const smoothed = last
-          ? {
-              x: last.x + alpha * (boardCorrected.x - last.x),
-              y: last.y + alpha * (boardCorrected.y - last.y),
-            }
-          : boardCorrected
-        smoothedPointRef.current = smoothed
+        const smoothed =
+          filterRef.current?.filter(boardCorrected.x, boardCorrected.y, now) ?? boardCorrected
+
+        /*
+         * How far the head has drifted from the pose the model was fitted at.
+         * BlazeGaze takes head pose as an input, and our board correction was fit
+         * at one pose, so a player who has since leaned in or turned is being
+         * mapped by a model that was never shown their current geometry. Nothing
+         * here can undo that — you cannot infer the new mapping without new
+         * ground truth — but it can stop the tracker from *asserting* squares it
+         * has no business asserting, and it lets the UI say "press C" instead of
+         * leaving the player to wonder why the board stopped listening.
+         */
+        const drift = headDriftScore(model?.headPose ?? null, frame.head)
+        headDriftRef.current = drift
+        const driftPenalty = drift === null ? 1 : Math.max(0.25, 1 - 0.75 * Math.min(1, drift))
 
         const corrected: GazePoint = {
           ...smoothed,
@@ -202,7 +261,10 @@ export function useGazeTracking(): UseGazeTracking {
           // only take a light haircut here — multiplying the per-frame confidence
           // by the raw quality score counted it twice and left an honest ~1-square
           // calibration unable to reach the dwell commit threshold.
-          confidence: point.confidence * (model ? Math.max(0.45, model.qualityScore) : 0.3),
+          confidence:
+            point.confidence *
+            (model ? Math.max(0.45, model.qualityScore) : 0.3) *
+            driftPenalty,
         }
         correctedGazePointRef.current = corrected
 
@@ -213,19 +275,22 @@ export function useGazeTracking(): UseGazeTracking {
             rawGazePoint: point,
             correctedGazePoint: corrected,
             gazePoint: corrected,
-            blinkDetected: point.confidence < 0.5,
+            blinkDetected: frame.eyeClosure > 0.5,
             isCalibrated: !!model,
+            headDrift: drift,
             calibrationProgress: model
               ? 100
               : Math.min(99, (calibrationSampleCountRef.current / MIN_CALIBRATION_SAMPLES) * 100),
             calibrationQuality: model?.qualityScore ?? 0,
             calibrationErrorSquares: model?.validationErrorSquares ?? null,
             trackingIssue:
-              point.confidence < 0.4
-                ? 'low-confidence'
-                : model
-                  ? null
-                  : 'calibration-incomplete',
+              drift !== null && drift >= 1
+                ? 'head-moved'
+                : point.confidence < 0.4
+                  ? 'low-confidence'
+                  : model
+                    ? null
+                    : 'calibration-incomplete',
           }))
         }
       },
@@ -255,7 +320,9 @@ export function useGazeTracking(): UseGazeTracking {
       },
     })
     sourceRef.current = source
+    source.setBlinkSensitivity(blinkSensitivityRef.current)
     await source.start()
+    ownsAdaptationRef.current = source.ownsAdaptation
   }, [])
 
   // Poll the source for throughput, framing and a lost-signal flip. Kept off the
@@ -308,5 +375,10 @@ export function useGazeTracking(): UseGazeTracking {
     resetCalibration,
     onBlink,
     setSmoothing,
+    setBlinkSensitivity,
+    feedAdaptationPoint,
+    ownsAdaptationRef,
+    headPoseRef: headRef,
+    headDrift: state.headDrift,
   }
 }

@@ -7,21 +7,25 @@ export const ROW_LABELS = ['1', '2', '3', '4', '5', '6', '7', '8'] as const
 export const INITIAL_BOARD_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR'
 
 /**
- * Board palette — deep green and near-black, replacing the old grey-on-grey
- * pair. The two square colours differ in hue as well as lightness, so the grid
- * stays readable for players who see little contrast between two greys, and the
- * cream/charcoal piece set reads cleanly on both.
+ * Board palette. Each entry resolves a CSS custom property defined in
+ * `globals.css`, so the accessibility menu's high-contrast mode repaints the
+ * board along with the rest of the UI just by putting a class on <html> — the
+ * squares are inline-styled and would otherwise stay green while everything
+ * around them went black and yellow.
+ *
+ * The fallbacks after each `var()` keep the board drawable if these are ever
+ * rendered outside the app stylesheet (docs, tests, a stray Storybook).
  */
 export const BOARD_COLORS = {
-  light: '#69926f',
-  dark: '#1e2823',
+  light: 'var(--board-light, #7fae86)',
+  dark: 'var(--board-dark, #24322b)',
   /** Ring/edge tint used for the frame around the board. */
-  edge: '#2f4237',
+  edge: 'var(--board-edge, #3d5747)',
   /** Wash laid over the from/to squares of the last move. */
-  lastMove: 'rgba(245, 212, 92, 0.38)',
+  lastMove: 'var(--board-last-move, rgba(255, 224, 102, 0.45))',
   /** Wash over the king's square while it is in check. */
-  check: 'rgba(220, 68, 55, 0.55)',
+  check: 'var(--board-check, rgba(235, 80, 65, 0.6))',
   /** In-square coordinate labels, drawn in the *other* square colour. */
-  labelOnLight: 'rgba(30, 40, 35, 0.75)',
-  labelOnDark: 'rgba(105, 146, 111, 0.85)',
+  labelOnLight: 'var(--board-label-on-light, rgba(21, 30, 25, 0.85))',
+  labelOnDark: 'var(--board-label-on-dark, rgba(150, 199, 158, 0.95))',
 } as const
