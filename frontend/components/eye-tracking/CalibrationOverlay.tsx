@@ -321,7 +321,7 @@ export default function CalibrationOverlay({
       if (!raw) {
         setMessage(
           points.length === 0
-            ? 'No gaze signal yet — make sure your face is lit and in frame.'
+            ? 'No gaze signal yet. Check that your face is lit and in frame.'
             : 'Tracking was unstable. Trying this target again.',
         )
         retry(450)
@@ -389,10 +389,9 @@ export default function CalibrationOverlay({
         setRejectedModel(null)
         setPhase('low-quality')
         setMessage(
-          'The eye tracker is not producing a usable signal — your gaze barely moved ' +
-            'between dots, so there is nothing to calibrate against. This is a tracking ' +
-            'problem, not an accuracy one: check that your whole face is lit and in frame, ' +
-            'take off reflective glasses if you can, and try again.',
+          'The eye tracker is not producing a usable signal. Your gaze barely moved ' +
+            'between dots, so there is nothing to calibrate against. Check that your whole ' +
+            'face is lit and in frame, take off reflective glasses if you can, and try again.',
         )
         return
       }
@@ -408,7 +407,7 @@ export default function CalibrationOverlay({
       if (!model) {
         setRejectedModel(null)
         setPhase('low-quality')
-        setMessage('Calibration failed — no usable fit from these samples.')
+        setMessage('Calibration failed. These samples do not give a usable fit.')
         return
       }
 
@@ -418,9 +417,9 @@ export default function CalibrationOverlay({
         setRejectedModel(model)
         setPhase('low-quality')
         setMessage(
-          `Accuracy came out at about ${model.validationErrorSquares.toFixed(1)} squares — ` +
-            'more than a square off. Better light on your face, a steadier head and holding ' +
-            'each dot a beat longer usually fixes it. ' +
+          `Accuracy came out at about ${model.validationErrorSquares.toFixed(1)} squares, ` +
+            'which is more than a square off. Better light on your face, a steadier head, and ' +
+            'holding each dot a beat longer usually fixes it. ' +
             `(Tracker signal ${(diagnostics.signalRatio * 100).toFixed(0)}% of target spread.)`,
         )
         return
@@ -525,11 +524,11 @@ export default function CalibrationOverlay({
               Dot {Math.min(currentNumber, total)} of {total}
             </p>
             <p className="text-base text-[#e8eef7]">
-              Head still — move only your eyes.
+              Head still. Move only your eyes.
             </p>
             <p className={`text-base ${hasSignal ? 'text-[#7fd4ff]' : 'text-[#ff9d42] font-bold'}`}>
               {hasSignal
-                ? 'Tracking live — look at the dot and hold'
+                ? 'Tracking live. Look at the dot and hold.'
                 : 'Waiting for the eye tracker… (camera on? face in frame?)'}
             </p>
             {hasSignal && signalSpread !== null && (
@@ -539,7 +538,7 @@ export default function CalibrationOverlay({
                 }`}
               >
                 {signalSpread < PINNED_SPREAD_PX
-                  ? `Tracker output is not moving (${signalSpread.toFixed(0)}px) — it is not seeing your eyes`
+                  ? `Tracker output is not moving (${signalSpread.toFixed(0)}px). It cannot see your eyes.`
                   : `Tracker signal ${signalSpread.toFixed(0)}px`}
               </p>
             )}

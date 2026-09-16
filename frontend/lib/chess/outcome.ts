@@ -34,12 +34,12 @@ export function describeOutcome(
       return humanLost
         ? {
             headline: 'Checkmate!',
-            detail: 'Your king has no legal move left — Stockfish wins this one.',
+            detail: 'Your king has no legal move left. Stockfish wins this one.',
             tone: 'loss',
           }
         : {
             headline: 'You won the game!',
-            detail: 'Checkmate — Stockfish has no legal move left.',
+            detail: 'Stockfish has no legal move left.',
             tone: 'win',
           }
     }

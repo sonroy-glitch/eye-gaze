@@ -188,8 +188,8 @@ export default function EyeTrackingPanel({
           </p>
         ) : (
           <p className="text-xs text-yellow-400">
-            Not calibrated — enter eye control and look at the targets{' '}
-            {calibrationSampleCount > 0 ? `(${calibrationSampleCount} so far)` : ''}.
+            Not calibrated. Enter eye control and look at the targets
+            {calibrationSampleCount > 0 ? ` (${calibrationSampleCount} so far)` : ''}.
           </p>
         )}
       </div>

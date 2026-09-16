@@ -31,6 +31,22 @@ export interface RegionDwellOptions {
   divisions: number
   /** How long the gaze must hold a region before it commits (ms). */
   dwellTime: number
+  /**
+   * Identifies the frame the grid is currently laid over. Change it whenever the
+   * caller magnifies, backs out, or otherwise moves the frame, and the dwell
+   * re-arms against the new geometry.
+   *
+   * Without this the post-commit latch outlives the zoom step it belongs to.
+   * The latch only releases when the gaze moves to a *different* grid cell, but
+   * after a magnification the cell indices are renumbered against the new frame,
+   * so a player whose next target happens to fall in the same quadrant index
+   * they just picked (one time in four, at every step) stays latched: progress
+   * pins at 1 and the board stops responding until they look somewhere else and
+   * back. That reads as "the pieces will not move even after calibration".
+   * Votes collected against the old frame are meaningless here too, so the
+   * cleanest re-arm is to restart the whole sampler.
+   */
+  resetKey?: string
   onCommit: (region: { row: number; col: number }) => void
 }
 
@@ -62,6 +78,7 @@ export function useGazeRegionDwell({
   gazePoint,
   divisions,
   dwellTime,
+  resetKey = '',
   onCommit,
 }: RegionDwellOptions): RegionDwell {
   const [region, setRegion] = useState<{ row: number; col: number } | null>(null)
@@ -174,7 +191,7 @@ export function useGazeRegionDwell({
     }, UPDATE_INTERVAL_MS)
 
     return () => clearInterval(id)
-  }, [enabled])
+  }, [enabled, resetKey])
 
   return { region, progress, onBoard }
 }

@@ -44,8 +44,8 @@ export default function CalibrationInfoPage() {
         <div className="space-y-2">
           <h1 className="text-3xl font-bold text-foreground">Calibration is now in the game</h1>
           <p className="text-lg text-foreground/90">
-            Eye tracking is set up inside the game — no separate step. It takes about seventeen
-            seconds: a short instructions card, eighteen dots, and you are playing.
+            Eye tracking is set up inside the game, so there is no separate step. It takes about
+            seventeen seconds: a short instructions card, eighteen dots, and you are playing.
           </p>
         </div>
 
@@ -57,9 +57,9 @@ export default function CalibrationInfoPage() {
             eye.
           </Step>
           <Step icon={<Lightbulb className="w-5 h-5 text-primary" />} title="Get the light and your seat right first">
-            Light on your face, not behind you. Sit about an arm's length from the screen, centred
-            on the camera, and keep your head still — the game shows you this checklist before the
-            dots start.
+            Light on your face rather than behind you. Sit about an arm's length from the screen,
+            centred on the camera, and keep your head still. The game shows you this checklist
+            before the dots start.
           </Step>
           <Step icon={<MousePointerClick className="w-5 h-5 text-primary" />} title="Look at the dots">
             Eighteen dots appear over the board, roughly a second each. The first five teach the
@@ -67,8 +67,9 @@ export default function CalibrationInfoPage() {
             each one and hold until it moves on.
           </Step>
           <Step icon={<Sparkles className="w-5 h-5 text-primary" />} title="Then it explains how to play">
-            When calibration finishes you get the three steps — look to select, look to target,
-            blink to confirm — and they come back automatically if a move will not land. Press{' '}
+            When calibration finishes, the game shows you how to move a piece: you hold your gaze on
+            a quarter of the board, it zooms in, and three of those looks reach one square. Those
+            instructions come back on their own if a move will not land. Press{' '}
             <kbd className="px-1 py-0.5 rounded border border-border bg-muted font-mono">H</kbd> for
             them any time, or{' '}
             <kbd className="px-1 py-0.5 rounded border border-border bg-muted font-mono">C</kbd> to

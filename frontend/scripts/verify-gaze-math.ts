@@ -246,6 +246,81 @@ const check = (name: string, ok: boolean, detail = '') => {
     `top-left cell ${tl.row},${tl.col}; bottom-right ${br.row},${br.col}`)
 }
 
+// ------------------------------------------- Region dwell re-arms on zoom
+{
+  /*
+   * The zoom stack is only playable if a descent can actually run to the bottom
+   * without the player looking away. `useGazeRegionDwell` latches after each
+   * commit so one long look cannot fire the same region twice, and the latch
+   * releases when the gaze moves to a different grid cell. The catch is that a
+   * magnification renumbers the cells against a new frame, so "the same cell"
+   * before and after a zoom are different places on the board. A player whose
+   * next quarter happens to carry the same index stayed latched, and the board
+   * stopped responding until they looked elsewhere and came back.
+   *
+   * This replays the hook's latch rule over a full descent, with the gaze
+   * following the target square across each zoom, and asserts every square on
+   * the board is still reachable.
+   */
+  const BOARD_N = 8
+  const DIVISIONS = 2
+  const rect = { left: 0, top: 0, width: 800, height: 800 }
+
+  /** Screen point of a square's centre under the currently magnified region. */
+  const screenPos = (sr: number, sc: number, reg: { row: number; col: number; size: number }) => ({
+    x: rect.left + ((sc + 0.5 - reg.col) / reg.size) * rect.width,
+    y: rect.top + ((sr + 0.5 - reg.row) / reg.size) * rect.height,
+  })
+
+  /** Does a steady look at `square` reach it, given whether the dwell re-arms? */
+  const descends = (square: { row: number; col: number }, reArm: boolean) => {
+    let region = { row: 0, col: 0, size: BOARD_N }
+    let latched: { row: number; col: number } | null = null
+    // Each iteration is one completed dwell; the loop bound is generous so a
+    // stall shows up as "ran out" rather than looping forever.
+    for (let step = 0; step < 32; step++) {
+      const g = screenPos(square.row, square.col, region)
+      const stable = {
+        row: Math.min(DIVISIONS - 1, Math.floor(((g.y - rect.top) / rect.height) * DIVISIONS)),
+        col: Math.min(DIVISIONS - 1, Math.floor(((g.x - rect.left) / rect.width) * DIVISIONS)),
+      }
+      if (latched && (latched.row !== stable.row || latched.col !== stable.col)) latched = null
+      if (latched) return { reached: false, region }
+
+      latched = stable
+      const half = region.size / DIVISIONS
+      region = {
+        row: region.row + stable.row * half,
+        col: region.col + stable.col * half,
+        size: half,
+      }
+      if (half <= 1) return { reached: true, region }
+      if (reArm) latched = null
+    }
+    return { reached: false, region }
+  }
+
+  let reachableWithoutReArm = 0
+  let reachableWithReArm = 0
+  let landedCorrectly = 0
+  for (let r = 0; r < BOARD_N; r++) {
+    for (let c = 0; c < BOARD_N; c++) {
+      if (descends({ row: r, col: c }, false).reached) reachableWithoutReArm++
+      const withReArm = descends({ row: r, col: c }, true)
+      if (withReArm.reached) reachableWithReArm++
+      if (withReArm.region.row === r && withReArm.region.col === c) landedCorrectly++
+    }
+  }
+
+  check('re-arming the region dwell keeps every square reachable', reachableWithReArm === 64,
+    `${reachableWithReArm}/64 squares`)
+  check('and each descent lands on the square that was actually looked at', landedCorrectly === 64,
+    `${landedCorrectly}/64 squares`)
+  check('the stale latch this guards against really does strand squares',
+    reachableWithoutReArm < 64,
+    `without re-arming only ${reachableWithoutReArm}/64 are reachable`)
+}
+
 console.log(`\nADAPTATION ${ADAPTATION_TARGETS.length} + FIT ${CALIBRATION_TARGETS.length} + VALIDATION ${VALIDATION_TARGETS_ON_BOARD.length} = ${ADAPTATION_TARGETS.length + CALIBRATION_TARGETS.length + VALIDATION_TARGETS_ON_BOARD.length} dots`)
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`)
 process.exit(failures === 0 ? 0 : 1)

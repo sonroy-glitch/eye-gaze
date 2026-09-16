@@ -104,9 +104,9 @@ export default function LeftSidebar({
 
       {/* Footer Info */}
       <div className="text-xs text-muted-foreground space-y-1">
-        <p>Eye-gaze controlled</p>
-        <p>Use your gaze to select squares</p>
-        <p>Blink to confirm moves</p>
+        <p>Press F for eye control</p>
+        <p>Three looks pick a square</p>
+        <p>Press H for the instructions</p>
       </div>
     </motion.div>
   )

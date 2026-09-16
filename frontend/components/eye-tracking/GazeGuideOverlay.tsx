@@ -77,17 +77,17 @@ export default function GazeGuideOverlay({
 
   const heading =
     variant === 'before-calibration'
-      ? 'Before we calibrate your eyes'
+      ? 'Before you calibrate'
       : reason === 'struggling'
-        ? 'Having trouble? Here it is again'
-        : 'Your eyes are calibrated — here is how to play'
+        ? 'Stuck? Here are the steps again'
+        : 'Calibration done. Here is how to play.'
 
   const subheading =
     variant === 'before-calibration'
-      ? `${TOTAL_DOTS} dots, about ${estimatedSeconds} seconds. Read these four things first — they are the difference between calibration working first time and having to redo it.`
+      ? `${TOTAL_DOTS} dots, about ${estimatedSeconds} seconds. Read these four things first. Skipping them is the usual reason calibration has to be done twice.`
       : reason === 'struggling'
-        ? 'Nothing has moved for a while. If the board still will not follow your eyes, press C to recalibrate — or T to try the other eye tracker.'
-        : 'Three looks to a square, twice per move. You can always fall back to the mouse — it keeps working.'
+        ? 'Nothing has moved for a while. If the board still will not follow your eyes, press C to calibrate again, or T to try the other eye tracker.'
+        : 'Three looks pick a square. A move takes two squares, so six looks in all. The mouse keeps working if you would rather use it.'
 
   return (
     <AnimatePresence>
@@ -148,9 +148,7 @@ export default function GazeGuideOverlay({
                 onClick={onContinue}
                 className="flex-1 rounded-xl bg-[#ffd24a] px-6 py-4 text-lg font-extrabold text-[#0d1117] outline-none transition-transform hover:scale-[1.02] focus-visible:ring-4 focus-visible:ring-white"
               >
-                {variant === 'before-calibration'
-                  ? "I'm ready — start calibration"
-                  : 'Got it — start playing'}
+                {variant === 'before-calibration' ? 'Start calibration' : 'Start playing'}
               </button>
               {variant === 'how-to-play' && onRecalibrate && (
                 <button
@@ -171,7 +169,7 @@ export default function GazeGuideOverlay({
                   or <Kbd>Esc</Kbd> to leave eye control
                 </>
               ) : null}
-              . Your camera never leaves this device.
+              . Your video never leaves this device.
             </p>
           </motion.div>
         </motion.div>
@@ -193,36 +191,41 @@ const SETUP_STEPS = [
   },
   {
     icon: Timer,
-    title: 'Keep your head still — move only your eyes',
+    title: 'Keep your head still and move only your eyes',
     copy: 'The tracker learns where your eyes point from this one head position. If you shift or lean afterwards, press C to redo it.',
   },
   {
     icon: MousePointerClick,
     title: 'Look straight at each dot until it moves on',
-    copy: 'Each dot captures on its own in about a second — just hold your gaze on it. The first five teach the tracker your eyes; the rest line it up with the board.',
+    copy: 'Each dot captures on its own in about a second, so just hold your gaze on it. The first five teach the tracker your eyes. The rest line it up with the board.',
   },
 ]
 
 const PLAY_STEPS = [
   {
     icon: Target,
-    title: 'Look at the quarter of the board you want, and hold',
-    copy: 'A yellow frame fills around it, then that quarter zooms in to fill the screen.',
+    title: 'You are never asked to look at one square',
+    copy: 'The board is split into four quarters. You pick a quarter, it fills the screen, and then it splits into four again. After three of these you are down to a single square. Big targets every time, which is why an ordinary webcam is accurate enough.',
   },
   {
-    icon: Target,
-    title: 'Again, and once more — quarter, quarter, square',
-    copy: 'Three looks narrow the whole board down to one square. Every step asks the same easy question, so a webcam that is a square or two out still lands on exactly the square you meant. Look away from the board for a second to step back out.',
+    icon: Timer,
+    title: 'Hold each look until the yellow frame fills',
+    copy: 'Rest your gaze on the quarter you want and keep it there for about a second. A yellow frame closes around it while you hold. It only counts when the frame is full, so a glance across the board will not select anything by accident.',
   },
   {
     icon: Eye,
-    title: 'The third look picks the piece — then do it again to move it',
-    copy: 'Choosing your piece selects it and its legal moves light up. Repeat the three looks on the square you want to move to, and the move is played.',
+    title: 'Three looks to pick the piece, three more to move it',
+    copy: 'The third look picks up whatever is on that square. Your piece lights up along with every square it can legally reach. Now do the same three looks on the square you want, and the move is played.',
+  },
+  {
+    icon: Move,
+    title: 'Picked the wrong quarter? Look away',
+    copy: 'Look off the board for a second and it steps back out one level, so an overshoot costs you one look rather than the whole move.',
   },
   {
     icon: RefreshCw,
     title: 'If the board is not following your eyes',
-    copy: 'Press C to recalibrate, T to switch to the other eye tracker (the two fail differently — if one will not follow you, the other usually will), Z to turn off the three-step selection, H for these instructions. The mouse always works.',
+    copy: 'Press C to calibrate again. Press T to switch to the other eye tracker, which often works when the first one will not follow you. Press Z to turn the quarters off and look straight at squares. Press H to bring this card back. The mouse works the whole time.',
   },
 ]
 

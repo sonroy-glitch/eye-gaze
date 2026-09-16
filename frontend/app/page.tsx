@@ -28,15 +28,15 @@ import FaceMesh from '@/components/landing/FaceMesh'
 /** The three promises that sit directly under the hero buttons. */
 const HERO_POINTS = [
   { icon: Camera, title: 'No Special Hardware', copy: 'Works with any webcam' },
-  { icon: SlidersHorizontal, title: 'Adaptive AI', copy: 'Difficulty adjusts to you' },
-  { icon: ShieldCheck, title: 'Accessible by Design', copy: 'Built for everyone' },
+  { icon: SlidersHorizontal, title: 'Stockfish Opponent', copy: 'Pick the level you want' },
+  { icon: ShieldCheck, title: 'Accessible by Design', copy: 'Playable with gaze alone' },
 ]
 
 const STEPS = [
   {
     icon: Camera,
     title: '1. Calibrate',
-    copy: 'Eighteen dots, about seventeen seconds. Look at each one; the game learns where your eyes point.',
+    copy: 'Eighteen dots, about seventeen seconds. Look at each one so the game learns where your eyes point.',
   },
   {
     icon: Eye,
@@ -74,7 +74,7 @@ const BEFORE_YOU_START = [
   {
     icon: Gauge,
     title: 'Sit an arm’s length away and stay put',
-    copy: 'Centre yourself on the camera. Calibration learns one head position — if you shift, press C to redo it.',
+    copy: 'Centre yourself on the camera. Calibration learns one head position, so if you shift or lean, press C to redo it.',
   },
   {
     icon: Keyboard,
@@ -92,27 +92,27 @@ const FEATURES = [
   {
     icon: Zap,
     title: 'Zoom-to-Select',
-    copy: 'Each look narrows the board by half, so no step ever needs pinpoint accuracy.',
+    copy: 'Each look cuts what is on screen down to a quarter, so no step needs pinpoint accuracy.',
   },
   {
     icon: Brain,
-    title: 'Adaptive AI',
-    copy: 'Stockfish on the back end, with difficulty that meets you where you are.',
+    title: 'Stockfish Opponent',
+    copy: 'A real engine on the back end, playing at the level you choose.',
   },
   {
     icon: Globe,
     title: 'Runs In The Browser',
-    copy: 'No install, no drivers, no dongles. Open the page and play.',
+    copy: 'Nothing to install and no drivers to set up. Open the page and play.',
   },
   {
     icon: Gauge,
     title: 'Tunable Dwell',
-    copy: 'Set the dwell time and smoothing that suit your control, not an average.',
+    copy: 'Set your own dwell time and cursor smoothing in the settings panel.',
   },
   {
     icon: Sparkles,
     title: 'Readable Board',
-    copy: 'High-contrast pieces and a green board designed to be read at a glance.',
+    copy: 'High-contrast pieces, and outlines heavy enough to tell white from black on a dark square.',
   },
 ]
 
@@ -120,7 +120,7 @@ const ACCESS_POINTS = [
   {
     icon: Accessibility,
     title: 'Hands-free by default',
-    copy: 'Every part of a game — selecting, moving, confirming — is reachable with gaze alone.',
+    copy: 'You can pick a piece, move it and start a new game without touching anything.',
   },
   {
     icon: Keyboard,
@@ -129,12 +129,12 @@ const ACCESS_POINTS = [
   },
   {
     icon: SlidersHorizontal,
-    title: 'Yours to tune',
+    title: 'Settings you control',
     copy: 'Dwell time, cursor size, smoothing and reduced motion all live in one settings panel.',
   },
 ]
 
-const POWERED_BY = ['MediaPipe', 'python-chess', 'Stockfish']
+const POWERED_BY = ['MediaPipe', 'WebEyeTrack', 'Stockfish']
 
 const fadeUp = {
   hidden: { opacity: 0, y: 24 },
@@ -181,11 +181,11 @@ export default function Home() {
 
             <motion.div variants={fadeUp} className="space-y-4">
               <p className="text-xl text-muted-foreground sm:text-2xl">
-                No hands. No mouse. Just your gaze.
+                Play a whole game without touching a mouse.
               </p>
               <p className="max-w-xl text-base leading-relaxed text-muted-foreground/90">
-                Eye Gaze Chess lets you play the world&rsquo;s greatest game using only your eyes.
-                Built for people with ALS, cerebral palsy, or severe motor impairments.
+                Your webcam works out where you are looking, and the board follows. Built for people
+                with ALS, cerebral palsy, or other severe motor impairments.
               </p>
             </motion.div>
 
@@ -310,10 +310,10 @@ export default function Home() {
               </span>
               <div>
                 <p className="text-base font-semibold text-foreground">
-                  Designed for inclusion. Built for independence.
+                  Made for people who cannot use a mouse
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  Eye Gaze Chess empowers people who have never been able to play chess before.
+                  If a mouse or a touchscreen is out of reach, a webcam and your eyes are enough.
                 </p>
               </div>
             </div>
@@ -343,7 +343,7 @@ export default function Home() {
         >
           <motion.div variants={fadeUp}>
             <h2 className="text-3xl font-bold tracking-tight">How It Works</h2>
-            <p className="mt-2 text-muted-foreground">Simple. Intuitive. Powerful.</p>
+            <p className="mt-2 text-muted-foreground">Four steps, and then you are playing.</p>
             <Link
               href="/calibration"
               className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline"
@@ -382,8 +382,8 @@ export default function Home() {
               Before you start
             </h2>
             <p className="mt-2 text-lg text-foreground/90">
-              Four things to get right first. They take a minute, and they are the difference
-              between calibrating once and calibrating three times.
+              Four things to get right first. Each takes a few seconds, and skipping them is the
+              usual reason calibration has to be repeated.
             </p>
           </motion.div>
 
@@ -417,10 +417,10 @@ export default function Home() {
         >
           <motion.div variants={fadeUp} className="mb-12 max-w-2xl">
             <h2 className="text-4xl font-bold tracking-tight sm:text-5xl">
-              Everything the board needs
+              What the game is made of
             </h2>
             <p className="mt-4 text-lg text-muted-foreground">
-              Real eye tracking, a real engine, and a board built to be read — not squinted at.
+              Real eye tracking, a real chess engine, and a board you can read at a glance.
             </p>
           </motion.div>
 
@@ -464,9 +464,9 @@ export default function Home() {
               The whole game, without a hand on the mouse
             </h2>
             <p className="text-lg leading-relaxed text-muted-foreground">
-              Eye control runs fullscreen, so every square is large enough for gaze to land on it
-              reliably. Nothing commits without a deliberate blink, and every timing that matters is
-              yours to change.
+              Eye control runs fullscreen, so every square is large enough for your gaze to land on
+              reliably. Nothing is played until you have held three deliberate looks on the same
+              square, and you can change how long a look has to be.
             </p>
           </motion.div>
 
@@ -506,9 +506,8 @@ export default function Home() {
             Ready to play?
           </motion.h2>
           <motion.p variants={fadeUp} className="text-lg leading-relaxed text-muted-foreground">
-            Eye Gaze Chess was built so that a webcam and an ordinary browser are enough to sit down
-            at a real board against a real engine. No hardware to buy, no setup to survive — open the
-            game, calibrate once, and play.
+            A webcam and an ordinary browser are enough to sit down against a real engine. There is
+            no hardware to buy and nothing to install. Open the game, calibrate once, and play.
           </motion.p>
           <motion.div variants={fadeUp} className="flex flex-col justify-center gap-3 sm:flex-row">
             <Link href="/game">
@@ -539,7 +538,7 @@ export default function Home() {
             <Eye className="h-4 w-4 text-primary" />
             Eye Gaze Chess
           </span>
-          <span>Accessibility first, always.</span>
+          <span>Runs entirely in your browser.</span>
         </div>
       </footer>
     </main>

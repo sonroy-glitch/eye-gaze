@@ -416,7 +416,7 @@ export default function GamePage() {
       }
 
       if (!current.selectedSquare) {
-        setHint('Pick one of your own pieces first — that square is not yours to move.')
+        setHint('Pick one of your own pieces first. There is nothing of yours on that square.')
         return
       }
 
@@ -474,8 +474,8 @@ export default function GamePage() {
       failedAttemptsRef.current += 1
       setHint(
         current.selectedSquare
-          ? 'That square is not a legal move for the selected piece — look at a highlighted square, then blink.'
-          : 'No piece selected yet — hold your gaze on one of your own pieces until the ring fills, then blink.',
+          ? 'That square is not a legal move for the piece you picked. Look at one of the highlighted squares, then blink.'
+          : 'No piece is selected yet. Hold your gaze on one of your own pieces until the ring fills, then blink.',
       )
       if (failedAttemptsRef.current >= STRUGGLE_FAILED_ATTEMPTS) showStruggleGuide()
       return
@@ -548,6 +548,12 @@ export default function GamePage() {
     gazePoint: gaze.state.gazePoint,
     divisions: COARSE_DIVISIONS,
     dwellTime: accessibility.dwellTime,
+    // Every zoom step redraws the frame the grid is measured against, so the
+    // dwell has to start over against the new geometry. See `resetKey` in the
+    // hook for what goes wrong when it does not.
+    resetKey: zoomRegion
+      ? `${zoomRegion.row}-${zoomRegion.col}-${zoomRegion.size}`
+      : 'full',
     onCommit: (picked) => {
       const current = zoomRegionRef.current ?? { row: 0, col: 0, size: FULL_REGION }
       const half = current.size / COARSE_DIVISIONS
@@ -816,7 +822,7 @@ export default function GamePage() {
           letting the board quietly stop obeying. */}
       {isFullscreen && !guide && !showCalibration && gazeControlReady && headMoved && (
         <div className="fixed bottom-24 left-1/2 z-[66] w-[min(92vw,42rem)] -translate-x-1/2 rounded-xl border-2 border-[#ff9d42] bg-[#0d1117] px-5 py-3 text-center text-lg font-semibold text-[#ff9d42] shadow-lg">
-          You have moved since calibrating — sit back where you were, or press C to recalibrate.
+          You have moved since calibrating. Sit back where you were, or press C to calibrate again.
         </div>
       )}
 
@@ -824,7 +830,7 @@ export default function GamePage() {
       {isFullscreen && gaze.isReady && !showCalibration && !boardBigEnough && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[66] flex items-center gap-2 rounded-lg border border-yellow-400/40 bg-card/90 px-3 py-2 text-xs text-yellow-400 shadow-lg">
           <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>Enlarge the window — squares must be ≥{MIN_GAZE_SQUARE_PX}px for eye control.</span>
+          <span>Enlarge the window. Squares must be at least {MIN_GAZE_SQUARE_PX}px for eye control.</span>
         </div>
       )}
 
@@ -835,8 +841,8 @@ export default function GamePage() {
         }
         title={
           orientation === 'white-top'
-            ? 'Flip board — put white at the bottom (V)'
-            : 'Flip board — put white at the top (V)'
+            ? 'Flip board: put white at the bottom (V)'
+            : 'Flip board: put white at the top (V)'
         }
         aria-label="Flip board orientation"
         className="fixed bottom-3 right-14 z-50 p-2 rounded-lg border border-border bg-card/80 backdrop-blur text-muted-foreground hover:text-foreground hover:bg-card transition-colors"
@@ -848,7 +854,7 @@ export default function GamePage() {
       <button
         onClick={() => (document.fullscreenElement ? exitEyeControl() : enterEyeControl())}
         title={
-          isFullscreen ? 'Exit eye control (Esc)' : 'Eye control — fullscreen, gaze on (F)'
+          isFullscreen ? 'Exit eye control (Esc)' : 'Eye control: fullscreen with gaze on (F)'
         }
         aria-label={isFullscreen ? 'Exit eye control' : 'Enter eye control'}
         aria-pressed={isFullscreen}
