@@ -464,9 +464,9 @@ export default function Home() {
               The whole game, without a hand on the mouse
             </h2>
             <p className="text-lg leading-relaxed text-muted-foreground">
-              Eye control runs fullscreen, so every square is large enough for your gaze to land on
-              reliably. Nothing is played until you have held three deliberate looks on the same
-              square, and you can change how long a look has to be.
+              Eye control runs fullscreen, so every target is large enough for your gaze to land on
+              reliably. A move takes three held looks to reach the piece and three more to place it,
+              and you can set how long a look has to be.
             </p>
           </motion.div>
 

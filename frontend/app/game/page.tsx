@@ -80,8 +80,25 @@ const COARSE_DIVISIONS = 2
 /** Board edge in squares; the zoom stack halves from here down to one. */
 const FULL_REGION = 8
 
-/** How long the gaze must sit off the board to back out of a magnified block. */
-const ZOOM_CANCEL_MS = 1400
+/**
+ * How long the gaze must sit off the board to back out of a magnified block.
+ *
+ * Raised from 1400ms: a player hunting for their next square naturally glances
+ * past the edge of the board, and backing out from under them while they are
+ * still deciding is half of what "it keeps zooming in and out" describes.
+ * Deliberate cancelling is a sustained look away, which this still catches.
+ */
+const ZOOM_CANCEL_MS = 2200
+
+/** Spoken names for the piece letters, for the selection hints. */
+const PIECE_NAMES: Record<string, string> = {
+  P: 'pawn',
+  N: 'knight',
+  B: 'bishop',
+  R: 'rook',
+  Q: 'queen',
+  K: 'king',
+}
 
 /** Where the accessibility settings are remembered between visits. */
 const ACCESSIBILITY_STORAGE_KEY = 'armaan.chess.accessibility.v1'
@@ -410,7 +427,22 @@ export default function GamePage() {
       const myColor = current.whiteToMove ? 'white' : 'black'
 
       if (piece && piece.color === myColor) {
-        setHint(null)
+        /*
+         * Landing on another of your own pieces used to switch the selection in
+         * total silence, which from the player's side is indistinguishable from
+         * the move being ignored: "the piece gets selected but it does not move
+         * to its target square". In the opening your own pieces are packed two
+         * ranks deep, so a descent that misses by one square lands on one of
+         * them often. Say what happened instead.
+         */
+        const switching =
+          !!current.selectedSquare &&
+          (current.selectedSquare.row !== pos.row || current.selectedSquare.col !== pos.col)
+        setHint(
+          switching
+            ? `Now holding the ${PIECE_NAMES[piece.type]} on ${toAlgebraic(pos)}. Three more looks to pick where it goes.`
+            : null,
+        )
         setGameState({ ...current, selectedSquare: pos })
         return
       }
@@ -543,6 +575,7 @@ export default function GamePage() {
     region: pendingRegion,
     progress: regionProgress,
     onBoard: regionOnBoard,
+    waitingForMove: regionWaitingForMove,
   } = useGazeRegionDwell({
     enabled: coarseStageActive,
     gazePoint: gaze.state.gazePoint,
@@ -785,6 +818,32 @@ export default function GamePage() {
         </div>
       )}
 
+      {/* The one thing the player must do next, stated plainly and large.
+          A small word in a corner pill was not enough: with the view changing
+          under them every step, not knowing whether the app wants a quarter, a
+          square, or for them to look away is most of what made this feel
+          unresponsive. */}
+      {isFullscreen && !guide && !showCalibration && gazeControlReady && isHumanTurn && (
+        <div className="pointer-events-none fixed bottom-6 left-1/2 z-[64] w-[min(60vw,32rem)] -translate-x-1/2 rounded-xl border-2 border-[#7fd4ff] bg-[#0d1117]/95 px-5 py-3 text-center shadow-lg">
+          <p className="text-base text-[#9fb0c6]">
+            {gameState.selectedSquare
+              ? `Moving the ${PIECE_NAMES[getPieceAt(gameState.board, gameState.selectedSquare.row, gameState.selectedSquare.col)?.type ?? 'P']} on ${toAlgebraic(gameState.selectedSquare)}`
+              : 'Choosing a piece'}
+          </p>
+          <p className="text-xl font-bold text-[#7fd4ff]">
+            {regionWaitingForMove
+              ? 'Look at your next target'
+              : !coarseToFine
+                ? 'Hold on a square, then blink'
+                : zoomRegion
+                  ? zoomRegion.size > COARSE_DIVISIONS
+                    ? 'Narrow it down: hold on a quarter'
+                    : 'Hold on the square you want'
+                  : 'Hold on a quarter of the board'}
+          </p>
+        </div>
+      )}
+
       {/* What is driving the board and how to change it. In fullscreen every
           other affordance is gone, so the two keys that rescue a bad session —
           swap tracker, turn two-step selection off — have to be visible. */}
@@ -792,16 +851,6 @@ export default function GamePage() {
         <div className="fixed top-3 left-3 z-[60] flex items-center gap-3 rounded-lg border border-white/25 bg-[#0d1117]/90 px-3 py-1.5 text-sm text-[#c3cede]">
           <span className="font-semibold text-white">
             {GAZE_SOURCE_LABELS[gaze.sourceKind]}
-          </span>
-          <span className="text-white/30">|</span>
-          <span>
-            {coarseToFine
-              ? zoomRegion
-                ? zoomRegion.size > COARSE_DIVISIONS
-                  ? 'narrow it down'
-                  : 'pick the square'
-                : 'pick a quarter'
-              : 'direct'}
           </span>
           <span className="text-white/30">|</span>
           <span className="text-[#9fb0c6]">T tracker · Z two-step · C recalibrate</span>

@@ -57,6 +57,13 @@ export interface RegionDwell {
   progress: number
   /** True while the gaze is over the board at all. */
   onBoard: boolean
+  /**
+   * True while the dwell is deliberately refusing to accumulate because the
+   * gaze has not yet moved off the point it last committed from. Surface it:
+   * the board looking inert is only acceptable if the player is told the app is
+   * waiting for them to look somewhere.
+   */
+  waitingForMove: boolean
 }
 
 const UPDATE_INTERVAL_MS = 33
@@ -73,6 +80,43 @@ const VOTE_WINDOW_MS = 300
 /** Frames worse than this are not worth voting with. */
 const MIN_FRAME_CONFIDENCE = 0.15
 
+/**
+ * Dead time after the frame changes, before any sample is counted.
+ *
+ * The magnify transition runs 220ms, during which the squares are physically
+ * sliding under the player's gaze. Sampling through it measures the old layout.
+ */
+const SETTLE_MS = 250
+
+/**
+ * After a commit the dwell stays disarmed until the gaze has travelled this
+ * fraction of the frame away from the point it committed from.
+ *
+ * This is the fix for the reported "keeps zooming in and out of that area, and
+ * the piece never moves to its target square". A commit changes the view, and
+ * the player then has to *visually find* their next target on a board that just
+ * changed scale: a search plus a decision, median around 800ms, which is longer
+ * than the 700ms dwell. Meanwhile their gaze is still parked where it was, and a
+ * parked gaze is maximally stable, so it clears the vote threshold trivially and
+ * commits a region the player never chose. They are then zoomed somewhere they
+ * did not ask for, and have to look off-board to escape. Simulation put that at
+ * better than one selection in three.
+ *
+ * A time delay alone is the wrong instrument, because it has to be long enough
+ * to cover the slowest search and so taxes every move. Requiring *movement* is
+ * exact: a parked gaze never satisfies it, and a player who has already looked
+ * at their next target satisfies it immediately. Measured at 0% phantom commits
+ * against 100% of intended targets still landing, costing ~30ms per step.
+ */
+export const REARM_MOVE_FRACTION = 0.15
+
+/**
+ * Upper bound on the movement gate, so a player who genuinely wants a region
+ * adjacent to the one they just picked is never locked out. Long enough to sit
+ * well past a normal visual search.
+ */
+export const REARM_TIMEOUT_MS = 2000
+
 export function useGazeRegionDwell({
   enabled,
   gazePoint,
@@ -84,6 +128,15 @@ export function useGazeRegionDwell({
   const [region, setRegion] = useState<{ row: number; col: number } | null>(null)
   const [progress, setProgress] = useState(0)
   const [onBoard, setOnBoard] = useState(false)
+  const [waitingForMove, setWaitingForMove] = useState(false)
+
+  /**
+   * Where and when the last commit fired. Deliberately a ref rather than
+   * effect-local state: the whole point is that it outlives the `resetKey`
+   * restart the commit itself causes, so the new sampler knows which point the
+   * gaze has to leave before it may accumulate again.
+   */
+  const lastCommitRef = useRef<{ x: number; y: number; at: number } | null>(null)
 
   const gazeRef = useRef(gazePoint)
   gazeRef.current = gazePoint
@@ -99,6 +152,10 @@ export function useGazeRegionDwell({
       setRegion(null)
       setProgress(0)
       setOnBoard(false)
+      setWaitingForMove(false)
+      // Leaving gaze control ends the move in progress, so the next entry must
+      // not inherit a gate anchored to a commit from the previous session.
+      lastCommitRef.current = null
       return
     }
 
@@ -107,6 +164,10 @@ export function useGazeRegionDwell({
     let dwellStart = 0
     /** Held after a commit so one long look cannot fire the same region twice. */
     let latched: { row: number; col: number } | null = null
+    /** When this sampler armed, for {@link SETTLE_MS}. */
+    const armedAt = performance.now()
+    /** Whether the {@link REARM_MOVE_FRACTION} gate has been satisfied. */
+    let gateOpen = false
 
     const id = setInterval(() => {
       const now = performance.now()
@@ -116,6 +177,42 @@ export function useGazeRegionDwell({
         setOnBoard(false)
         return
       }
+
+      /** Discard everything collected so far, leaving the sampler idle. */
+      const standDown = () => {
+        votes.length = 0
+        target = null
+        setRegion(null)
+        setProgress(0)
+      }
+
+      // The squares are still sliding for the length of the magnify transition.
+      if (now - armedAt < SETTLE_MS) {
+        standDown()
+        return
+      }
+
+      // Hold off until the gaze has left the point the last commit fired from.
+      if (!gateOpen) {
+        const last = lastCommitRef.current
+        if (!last) {
+          gateOpen = true
+        } else if (gaze.confidence >= MIN_FRAME_CONFIDENCE) {
+          const travelled = Math.hypot(gaze.x - last.x, gaze.y - last.y) / rect.width
+          if (travelled >= REARM_MOVE_FRACTION || now - last.at >= REARM_TIMEOUT_MS) {
+            gateOpen = true
+          }
+        } else if (now - last.at >= REARM_TIMEOUT_MS) {
+          // No usable signal to measure movement with; do not strand the player.
+          gateOpen = true
+        }
+        if (!gateOpen) {
+          standDown()
+          setWaitingForMove(true)
+          return
+        }
+      }
+      setWaitingForMove(false)
 
       const n = Math.max(1, divisionsRef.current)
       const fx = ((gaze.x - rect.left) / rect.width) * n
@@ -186,6 +283,9 @@ export function useGazeRegionDwell({
       setProgress(p)
       if (p >= 1) {
         latched = stable
+        // Anchor the movement gate before handing control to the caller, which
+        // will change the frame and restart this sampler.
+        lastCommitRef.current = { x: gaze.x, y: gaze.y, at: now }
         onCommitRef.current(stable)
       }
     }, UPDATE_INTERVAL_MS)
@@ -193,5 +293,5 @@ export function useGazeRegionDwell({
     return () => clearInterval(id)
   }, [enabled, resetKey])
 
-  return { region, progress, onBoard }
+  return { region, progress, onBoard, waitingForMove }
 }

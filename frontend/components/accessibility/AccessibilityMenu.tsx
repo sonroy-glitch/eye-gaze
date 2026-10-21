@@ -97,6 +97,9 @@ export default function AccessibilityMenu({
                   <Eye className="w-4 h-4" />
                   Dwell Time (ms)
                 </label>
+                <p className="text-xs text-muted-foreground">
+                  How long you hold each of the three looks that pick a square.
+                </p>
                 {/* Bounded to the range that works for gaze dwell: below ~500ms
                     a passing glance can trigger, above ~1000ms selection drags. */}
                 <input
@@ -144,6 +147,10 @@ export default function AccessibilityMenu({
                   <Zap className="w-4 h-4" />
                   Blink Sensitivity
                 </label>
+                <p className="text-xs text-muted-foreground">
+                  Only used when you turn the three-step selection off with Z. In the normal mode
+                  the third look plays the move and blinking does nothing.
+                </p>
                 <div className="flex gap-2">
                   {['low', 'medium', 'high'].map((level) => (
                     <motion.button

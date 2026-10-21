@@ -87,7 +87,7 @@ export default function GazeGuideOverlay({
       ? `${TOTAL_DOTS} dots, about ${estimatedSeconds} seconds. Read these four things first. Skipping them is the usual reason calibration has to be done twice.`
       : reason === 'struggling'
         ? 'Nothing has moved for a while. If the board still will not follow your eyes, press C to calibrate again, or T to try the other eye tracker.'
-        : 'Three looks pick a square. A move takes two squares, so six looks in all. The mouse keeps working if you would rather use it.'
+        : 'Three looks pick a square, and a move takes two squares. The mouse keeps working if you would rather use it.'
 
   return (
     <AnimatePresence>
@@ -108,7 +108,7 @@ export default function GazeGuideOverlay({
             animate={{ scale: 1, y: 0, opacity: 1 }}
             exit={{ scale: 0.98, opacity: 0 }}
             transition={{ duration: 0.22 }}
-            className="relative w-[min(94vw,44rem)] max-h-[92vh] overflow-y-auto rounded-2xl border-2 border-[#ffd24a] bg-[#0d1117] p-6 sm:p-8 shadow-[0_0_60px_rgba(255,210,74,0.25)]"
+            className="relative w-[min(94vw,44rem)] max-h-[96vh] overflow-y-auto rounded-2xl border-2 border-[#ffd24a] bg-[#0d1117] p-6 shadow-[0_0_60px_rgba(255,210,74,0.25)]"
           >
             <div className="flex items-center gap-3">
               <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#ffd24a] text-[#0d1117]">
@@ -123,9 +123,12 @@ export default function GazeGuideOverlay({
               </h2>
             </div>
 
-            <p className="mt-4 text-lg leading-relaxed text-[#e8eef7]">{subheading}</p>
+            <p className="mt-3 text-lg leading-relaxed text-[#e8eef7]">{subheading}</p>
 
-            <ol className="mt-6 space-y-4">
+            {/* Spacing is deliberately tight: at a 800px-tall fullscreen the card
+                must fit without scrolling, because the person reading it is using
+                their eyes only and has no way to scroll an overlay. */}
+            <ol className="mt-5 space-y-3">
               {steps.map((step, i) => (
                 <li key={step.title} className="flex gap-4">
                   <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border-2 border-[#7fd4ff] text-[#7fd4ff]">
@@ -141,7 +144,7 @@ export default function GazeGuideOverlay({
               ))}
             </ol>
 
-            <div className="mt-7 flex flex-col gap-3 sm:flex-row">
+            <div className="mt-5 flex flex-col gap-3 sm:flex-row">
               <button
                 ref={continueRef}
                 type="button"
@@ -161,7 +164,7 @@ export default function GazeGuideOverlay({
               )}
             </div>
 
-            <p className="mt-4 text-center text-base text-[#9fb0c6]">
+            <p className="mt-3 text-center text-base text-[#9fb0c6]">
               Press <Kbd>Enter</Kbd> to continue
               {onCancel ? (
                 <>
@@ -204,28 +207,23 @@ const SETUP_STEPS = [
 const PLAY_STEPS = [
   {
     icon: Target,
-    title: 'You are never asked to look at one square',
-    copy: 'The board is split into four quarters. You pick a quarter, it fills the screen, and then it splits into four again. After three of these you are down to a single square. Big targets every time, which is why an ordinary webcam is accurate enough.',
+    title: 'You pick a quarter, not a square',
+    copy: 'The board splits into four. Choose one quarter, it fills the screen, and it splits again. Three of those and you are on a single square, and the target stays big the whole way down.',
   },
   {
     icon: Timer,
-    title: 'Hold each look until the yellow frame fills',
-    copy: 'Rest your gaze on the quarter you want and keep it there for about a second. A yellow frame closes around it while you hold. It only counts when the frame is full, so a glance across the board will not select anything by accident.',
+    title: 'Hold each look until the bar fills',
+    copy: 'A yellow box marks the quarter you are on, and a bar fills along the bottom of it. Nothing is chosen until that bar is full. Picked the wrong quarter? Look off the board for a second or two and it steps back out.',
   },
   {
     icon: Eye,
-    title: 'Three looks to pick the piece, three more to move it',
-    copy: 'The third look picks up whatever is on that square. Your piece lights up along with every square it can legally reach. Now do the same three looks on the square you want, and the move is played.',
-  },
-  {
-    icon: Move,
-    title: 'Picked the wrong quarter? Look away',
-    copy: 'Look off the board for a second and it steps back out one level, so an overshoot costs you one look rather than the whole move.',
+    title: 'Three looks pick the piece, three more move it',
+    copy: 'The third look picks up your piece, its legal squares light up, and the board zooms back out. Take your time finding your target, because nothing counts until you look away from the piece. Then three more looks to place it.',
   },
   {
     icon: RefreshCw,
     title: 'If the board is not following your eyes',
-    copy: 'Press C to calibrate again. Press T to switch to the other eye tracker, which often works when the first one will not follow you. Press Z to turn the quarters off and look straight at squares. Press H to bring this card back. The mouse works the whole time.',
+    copy: 'C calibrates again. T switches eye tracker, which often helps when the first will not follow you. Z turns the quarters off. H brings this card back. The mouse works throughout.',
   },
 ]
 

@@ -19,6 +19,10 @@ import {
   ADAPTATION_TARGETS,
   targetToViewport,
 } from '@/lib/eye-tracking/calibration-model'
+import {
+  REARM_MOVE_FRACTION,
+  REARM_TIMEOUT_MS,
+} from '@/lib/eye-tracking/useGazeRegionDwell'
 
 const board = { left: 200, top: 100, width: 800, height: 800 }
 const squarePx = board.width / 8
@@ -319,6 +323,31 @@ const check = (name: string, ok: boolean, detail = '') => {
   check('the stale latch this guards against really does strand squares',
     reachableWithoutReArm < 64,
     `without re-arming only ${reachableWithoutReArm}/64 are reachable`)
+
+  /*
+   * Re-arming alone is not enough. A commit changes the view, and the player
+   * then has to find their next target on a board that just changed scale --
+   * a visual search, median around 800ms, longer than the 700ms dwell. Their
+   * gaze is still parked where it was, and a parked gaze is the most stable
+   * input the vote can receive, so it clears the threshold and commits a region
+   * nobody chose. The movement gate exists to make a parked gaze inert.
+   */
+  /**
+   * The gate as the hook applies it: travel is measured as a fraction of the
+   * frame width, against the constants the hook actually uses.
+   */
+  const gateOpens = (travelFrac: number, elapsedMs: number) =>
+    travelFrac >= REARM_MOVE_FRACTION || elapsedMs >= REARM_TIMEOUT_MS
+
+  check('a gaze still parked where it committed cannot commit again',
+    !gateOpens(0, 0) && !gateOpens(0.05, 500) && !gateOpens(0.14, 1500),
+    `needs ${(REARM_MOVE_FRACTION * 100).toFixed(0)}% of frame travel`)
+  check('a gaze that has moved to a new target arms immediately',
+    gateOpens(REARM_MOVE_FRACTION, 0) && gateOpens(0.4, 0),
+    'no added delay once the player has looked away')
+  check('and a player who wants an adjacent region is never locked out',
+    gateOpens(0, REARM_TIMEOUT_MS),
+    `gate expires after ${REARM_TIMEOUT_MS}ms`)
 }
 
 console.log(`\nADAPTATION ${ADAPTATION_TARGETS.length} + FIT ${CALIBRATION_TARGETS.length} + VALIDATION ${VALIDATION_TARGETS_ON_BOARD.length} = ${ADAPTATION_TARGETS.length + CALIBRATION_TARGETS.length + VALIDATION_TARGETS_ON_BOARD.length} dots`)
