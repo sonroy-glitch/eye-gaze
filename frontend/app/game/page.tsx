@@ -30,7 +30,7 @@ import { useGazeInteraction } from '@/lib/eye-tracking/useGazeInteraction'
 import { useGazeRegionDwell } from '@/lib/eye-tracking/useGazeRegionDwell'
 import { toAlgebraic, getBoardGeometry, invalidateBoardGeometry } from '@/lib/eye-tracking/board-mapping'
 import { DEFAULT_ORIENTATION, toLogical, type BoardOrientation } from '@/lib/chess/orientation'
-import { GAZE_SOURCE_LABELS } from '@/lib/eye-tracking/types'
+import { GAZE_SOURCE_LABELS, GAZE_SOURCE_ORDER } from '@/lib/eye-tracking/types'
 
 /**
  * Smallest square (CSS px) at which gaze selection is allowed. Gaze error is
@@ -309,10 +309,14 @@ export default function GamePage() {
         setCoarseToFine((on) => !on)
         setZoomRegion(null)
       } else if (e.key === 't' || e.key === 'T') {
-        // Swap estimators without leaving the game. Each keeps its own
-        // calibration, so switching back is free.
+        // Cycle estimators without leaving the game. Each keeps its own
+        // calibration, so coming back round to one is free. The head pointer is
+        // last in the order because it is the fallback when neither eye
+        // estimator is accurate enough on this face or camera.
         e.preventDefault()
-        void gaze.switchSource(gaze.sourceKind === 'mediapipe' ? 'webeyetrack' : 'mediapipe')
+        const order = GAZE_SOURCE_ORDER
+        const next = order[(order.indexOf(gaze.sourceKind) + 1) % order.length]
+        void gaze.switchSource(next)
       } else if (e.key === 'd' || e.key === 'D') {
         e.preventDefault()
         setDebugGaze((enabled) => !enabled)
@@ -825,6 +829,7 @@ export default function GamePage() {
           setGuide(null)
           exitEyeControl()
         }}
+        pointerMode={gaze.sourceKind === 'headpointer' ? 'head' : 'eyes'}
       />
 
       {/* Calibration overlay (only in gaze mode, until calibrated). */}
@@ -850,6 +855,7 @@ export default function GamePage() {
           onCancel={() => {
             setShowCalibration(false)
           }}
+          pointerMode={gaze.sourceKind === 'headpointer' ? 'head' : 'eyes'}
         />
       )}
 
@@ -875,7 +881,9 @@ export default function GamePage() {
           </p>
           <p className="text-xl font-bold text-[#7fd4ff]">
             {regionWaitingForMove
-              ? 'Look at your next target'
+              ? gaze.sourceKind === 'headpointer'
+                ? 'Aim at your next target'
+                : 'Look at your next target'
               : !coarseToFine
                 ? 'Hold on a square, then blink'
                 : zoomRegion

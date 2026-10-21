@@ -392,7 +392,12 @@ export function useGazeTracking(): UseGazeTracking {
     const source: GazeSourceLike =
       kind === 'mediapipe'
         ? new MediaPipeGazeSource(video, callbacks)
-        : new WebEyeTrackSource(video, callbacks)
+        : kind === 'headpointer'
+          ? // Same landmark pipeline as 'mediapipe', pointing with the head
+            // rather than the eyes. Its calibration is stored separately, so the
+            // two never contaminate each other.
+            new MediaPipeGazeSource(video, callbacks, 'head')
+          : new WebEyeTrackSource(video, callbacks)
 
     sourceRef.current = source
     source.setBlinkSensitivity(blinkSensitivityRef.current)

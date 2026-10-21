@@ -82,13 +82,28 @@ export interface AccessibilitySettings {
  * descriptor). Whichever one is having a bad day on a given machine, camera or
  * face, the other is usually fine — and switching is a keypress rather than a
  * rebuild.
+ *
+ * A third option drops the premise. `headpointer` aims with the head instead of
+ * the eyes, through the same landmarks, calibration and affine fit. Webcam gaze
+ * tops out around one to three squares of error no matter which estimator is
+ * used, which is why the board has to be picked by halving quarters; head
+ * aiming is a different and much better conditioned measurement, so it is worth
+ * having when the eye estimate is not good enough on a given face or camera.
  */
-export type GazeSourceKind = 'webeyetrack' | 'mediapipe'
+export type GazeSourceKind = 'webeyetrack' | 'mediapipe' | 'headpointer'
 
 export const GAZE_SOURCE_LABELS: Record<GazeSourceKind, string> = {
   webeyetrack: 'BlazeGaze CNN',
   mediapipe: 'MediaPipe iris',
+  headpointer: 'Head pointer',
 }
+
+/** Sources the T key cycles through, in order. */
+export const GAZE_SOURCE_ORDER: GazeSourceKind[] = [
+  'webeyetrack',
+  'mediapipe',
+  'headpointer',
+]
 
 /** Everything `useGazeTracking` needs from a raw source, whichever it is. */
 export interface GazeSourceLike {

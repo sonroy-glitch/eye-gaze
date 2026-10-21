@@ -25,6 +25,11 @@ interface GazeGuideOverlayProps {
   onCancel?: () => void
   /** Estimated seconds the calibration will take, shown before it starts. */
   estimatedSeconds?: number
+  /**
+   * Whether the player aims with their eyes or their head. The setup advice is
+   * the opposite in each case, so this is not cosmetic.
+   */
+  pointerMode?: 'eyes' | 'head'
 }
 
 const TOTAL_DOTS =
@@ -49,6 +54,7 @@ export default function GazeGuideOverlay({
   onRecalibrate,
   onCancel,
   estimatedSeconds = 17,
+  pointerMode = 'eyes',
 }: GazeGuideOverlayProps) {
   const continueRef = useRef<HTMLButtonElement | null>(null)
 
@@ -73,7 +79,8 @@ export default function GazeGuideOverlay({
     return () => window.removeEventListener('keydown', onKey, true)
   }, [open, onContinue, onCancel])
 
-  const steps = variant === 'before-calibration' ? SETUP_STEPS : PLAY_STEPS
+  const setupSteps = pointerMode === 'head' ? HEAD_SETUP_STEPS : SETUP_STEPS
+  const steps = variant === 'before-calibration' ? setupSteps : PLAY_STEPS
 
   const heading =
     variant === 'before-calibration'
@@ -204,6 +211,34 @@ const SETUP_STEPS = [
   },
 ]
 
+/**
+ * Setup advice for head pointing, which inverts two of the four eye-mode steps.
+ * Holding still is exactly wrong here: the head is the signal, so a player who
+ * keeps it still gives the calibration nothing to fit and it is rejected.
+ */
+const HEAD_SETUP_STEPS = [
+  {
+    icon: Move,
+    title: 'Sit an arm’s length away, facing the camera',
+    copy: 'Centre your face in the small camera preview at the bottom-left. Your whole face needs to stay in frame while you turn.',
+  },
+  {
+    icon: Lightbulb,
+    title: 'Put the light on your face, not behind you',
+    copy: 'A window or lamp in front of you is ideal. A bright window behind you turns your face into a silhouette and calibration will fail.',
+  },
+  {
+    icon: Timer,
+    title: 'You are aiming with your head, not your eyes',
+    copy: 'Point your nose at each dot and turn your head to reach it. Small movements are enough. Keeping your head still is the one thing that stops this working.',
+  },
+  {
+    icon: MousePointerClick,
+    title: 'Hold on each dot until it moves on',
+    copy: 'Each dot captures on its own in about a second. Aim, settle, and wait for it to pass to the next one.',
+  },
+]
+
 const PLAY_STEPS = [
   {
     icon: Target,
@@ -223,7 +258,7 @@ const PLAY_STEPS = [
   {
     icon: RefreshCw,
     title: 'If the board is not following your eyes',
-    copy: 'C calibrates again. T switches eye tracker, which often helps when the first will not follow you. Z turns the quarters off. H brings this card back. The mouse works throughout.',
+    copy: 'C calibrates again. T switches tracker, and the third one lets you aim with your head instead of your eyes, which is steadier for most people. Z turns the quarters off. H brings this card back. The mouse works throughout.',
   },
 ]
 

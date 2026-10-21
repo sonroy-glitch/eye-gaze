@@ -67,6 +67,15 @@ interface CalibrationOverlayProps {
   onProgress?: (completed: number, total: number, phase: CalibrationPhase) => void
   /** Bail out without finishing. */
   onCancel: () => void
+  /**
+   * What the player is actually aiming with.
+   *
+   * This changes the instruction, and getting it wrong breaks calibration
+   * outright: told to hold their head still, a head-pointer user produces a
+   * signal that barely moves between dots, which the sample diagnostic
+   * correctly rejects as a dead tracker.
+   */
+  pointerMode?: 'eyes' | 'head'
 }
 
 function resolve(target: CalibrationTarget): { x: number; y: number } {
@@ -92,7 +101,9 @@ export default function CalibrationOverlay({
   onComplete,
   onProgress,
   onCancel,
+  pointerMode = 'eyes',
 }: CalibrationOverlayProps) {
+  const headAimed = pointerMode === 'head'
   /** Whether the tracker's own adaptation can be taught; decided once, on mount. */
   const canAdaptRef = useRef<boolean>(!!feedAdaptationPoint && ownsAdaptationRef?.current !== false)
   const fitSamplesRef = useRef<CalibrationSample[]>([])
@@ -439,8 +450,12 @@ export default function CalibrationOverlay({
       setSampling(true)
       setMessage(
         phase === 'adapting'
-          ? 'Hold your gaze on the dot'
-          : 'Hold your gaze (or click / press Space)',
+          ? headAimed
+            ? 'Aim at the dot and hold still'
+            : 'Hold your gaze on the dot'
+          : headAimed
+            ? 'Aim at the dot and hold (or click / press Space)'
+            : 'Hold your gaze (or click / press Space)',
       )
       interval = setInterval(collect, SAMPLE_EVERY_MS)
       finishTimer = setTimeout(
@@ -524,11 +539,15 @@ export default function CalibrationOverlay({
               Dot {Math.min(currentNumber, total)} of {total}
             </p>
             <p className="text-base text-[#e8eef7]">
-              Head still. Move only your eyes.
+              {headAimed
+                ? 'Turn your head to face each dot. Your nose is the pointer.'
+                : 'Head still. Move only your eyes.'}
             </p>
             <p className={`text-base ${hasSignal ? 'text-[#7fd4ff]' : 'text-[#ff9d42] font-bold'}`}>
               {hasSignal
-                ? 'Tracking live. Look at the dot and hold.'
+                ? headAimed
+                  ? 'Tracking live. Aim at the dot and hold.'
+                  : 'Tracking live. Look at the dot and hold.'
                 : 'Waiting for the eye tracker… (camera on? face in frame?)'}
             </p>
             {hasSignal && signalSpread !== null && (

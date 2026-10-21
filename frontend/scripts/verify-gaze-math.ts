@@ -23,6 +23,8 @@ import {
   REARM_MOVE_FRACTION,
   REARM_TIMEOUT_MS,
 } from '@/lib/eye-tracking/useGazeRegionDwell'
+import { projectHeadFeature } from '@/lib/eye-tracking/mediapipe-source'
+import { GAZE_SOURCE_ORDER } from '@/lib/eye-tracking/types'
 
 const board = { left: 200, top: 100, width: 800, height: 800 }
 const squarePx = board.width / 8
@@ -348,6 +350,67 @@ const check = (name: string, ok: boolean, detail = '') => {
   check('and a player who wants an adjacent region is never locked out',
     gateOpens(0, REARM_TIMEOUT_MS),
     `gate expires after ${REARM_TIMEOUT_MS}ms`)
+}
+
+// --------------------------------------------- Head pointer projection
+{
+  /*
+   * The head-pointer source only works if a comfortable head movement already
+   * spans most of the screen before calibration touches it. Too small a spread
+   * and the affine fit has to amplify it, multiplying noise with it; too large
+   * and the player has to crane their neck to reach the board edges.
+   *
+   * The same diagnostic that catches a dead eye tracker would reject a head
+   * signal that barely moves, so this is the check that says head mode can be
+   * calibrated at all.
+   */
+  const W = 1920
+  const H = 1080
+
+  /** A comfortable head range: ~0.12 of the frame of translation, ~0.25rad turn. */
+  const atExtreme = (sx: number, sy: number) =>
+    projectHeadFeature(
+      {
+        ex: 0, ey: 0, eyLid: 0, vergence: 0, aperture: 0, roll: 0,
+        headX: 0.12 * sx,
+        headY: 0.12 * sy,
+        yaw: 0.25 * sx,
+        pitch: 0.25 * sy,
+        headScale: 0.1,
+      },
+      W,
+      H,
+    )
+
+  const left = atExtreme(-1, 0).x
+  const right = atExtreme(1, 0).x
+  const up = atExtreme(0, -1).y
+  const down = atExtreme(0, 1).y
+
+  const spanX = (right - left) / W
+  const spanY = (down - up) / H
+
+  check('head pointing spans most of the screen at a comfortable range',
+    spanX >= 0.8 && spanY >= 0.8,
+    `${(spanX * 100).toFixed(0)}% wide, ${(spanY * 100).toFixed(0)}% tall`)
+  check('and does not overshoot so far that the edges need a neck crane',
+    spanX <= 2.2 && spanY <= 2.2,
+    `${spanX.toFixed(2)}x / ${spanY.toFixed(2)}x of the screen`)
+
+  const centre = atExtreme(0, 0)
+  check('a centred head points at the centre of the screen',
+    Math.abs(centre.x - W / 2) < 1 && Math.abs(centre.y - H / 2) < 1,
+    `${centre.x.toFixed(0)}, ${centre.y.toFixed(0)}`)
+
+  // Signs must match the iris projection or the calibration fits a mirror.
+  check('turning right moves the pointer right, lowering the chin moves it down',
+    right > left && down > up)
+
+  check('the T key cycle reaches every source and returns',
+    GAZE_SOURCE_ORDER.length === 3 &&
+      new Set(GAZE_SOURCE_ORDER).size === 3 &&
+      GAZE_SOURCE_ORDER.includes('headpointer'),
+    GAZE_SOURCE_ORDER.join(' -> '))
 }
 
 console.log(`\nADAPTATION ${ADAPTATION_TARGETS.length} + FIT ${CALIBRATION_TARGETS.length} + VALIDATION ${VALIDATION_TARGETS_ON_BOARD.length} = ${ADAPTATION_TARGETS.length + CALIBRATION_TARGETS.length + VALIDATION_TARGETS_ON_BOARD.length} dots`)

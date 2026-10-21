@@ -69,6 +69,52 @@ function projectFeature(
   }
 }
 
+/**
+ * Which signal drives the pointer.
+ *
+ * `iris` is gaze: where the eyes are pointing, with the head divided out.
+ * `head` ignores the eyes entirely and points with the head instead.
+ */
+export type GazeProjectionMode = 'iris' | 'head'
+
+/**
+ * Head translation contributes this much of the screen per unit of normalised
+ * image movement. Small head movements are precise, so this carries most of the
+ * fine control.
+ */
+const HEAD_TRANSLATION_GAIN = 2.2
+/**
+ * Head rotation contributes the rest. Translation alone would need the player to
+ * physically move their head across a wide arc to reach the board edges, which
+ * is tiring; rotation extends the range without costing precision near centre.
+ */
+const HEAD_ROTATION_GAIN = 1.1
+
+/**
+ * Uncalibrated screen projection for head pointing.
+ *
+ * This exists because eye gaze from a webcam tops out at roughly one to three
+ * squares of error, which is the whole reason the board has to be selected by
+ * halving quarters. The head is a completely different proposition: people aim
+ * their head far more precisely than a webcam can infer where their pupils
+ * point, and the landmark pipeline measures head position and rotation directly
+ * rather than inferring them. Same calibration, same affine fit, same validation
+ * error readout, so the two are directly comparable on the number in the panel.
+ *
+ * Signs follow the iris projection: +yaw and +headX are screen-right in the
+ * mirrored view, +pitch and +headY are screen-down.
+ */
+export function projectHeadFeature(
+  feature: GazeFeature,
+  width: number,
+  height: number,
+): { x: number; y: number } {
+  return {
+    x: width * (0.5 + feature.headX * HEAD_TRANSLATION_GAIN + feature.yaw * HEAD_ROTATION_GAIN),
+    y: height * (0.5 + feature.headY * HEAD_TRANSLATION_GAIN + feature.pitch * HEAD_ROTATION_GAIN),
+  }
+}
+
 export class MediaPipeGazeSource {
   private landmarker: FaceLandmarker | null = null
   private readonly video: HTMLVideoElement
@@ -98,9 +144,17 @@ export class MediaPipeGazeSource {
    */
   readonly ownsAdaptation = false
 
-  constructor(video: HTMLVideoElement, callbacks: GazeSourceCallbacks) {
+  /** Whether the pointer follows the eyes or the head. */
+  private readonly mode: GazeProjectionMode
+
+  constructor(
+    video: HTMLVideoElement,
+    callbacks: GazeSourceCallbacks,
+    mode: GazeProjectionMode = 'iris',
+  ) {
     this.video = video
     this.cb = callbacks
+    this.mode = mode
   }
 
   setBlinkSensitivity(sensitivity: BlinkSensitivity): void {
@@ -230,9 +284,15 @@ export class MediaPipeGazeSource {
       }
     }
 
-    this.trackingIssue = this.eyesClosed ? 'low-confidence' : null
-    // The iris is occluded through a blink, so there is no estimate to make.
-    if (this.eyesClosed) return
+    /*
+     * The iris is occluded through a blink, so gaze has no estimate to make.
+     * Head pointing is unaffected: the face is still fully visible with the eyes
+     * shut, and dropping the point would make the pointer jump away at exactly
+     * the moment a blink-to-confirm needs it to hold still.
+     */
+    const blinkBlindsPointer = this.mode === 'iris'
+    this.trackingIssue = this.eyesClosed && blinkBlindsPointer ? 'low-confidence' : null
+    if (this.eyesClosed && blinkBlindsPointer) return
 
     const raw = extractGazeFeature(landmarks, result)
     if (!raw || !isFeatureFinite(raw)) {
@@ -243,7 +303,10 @@ export class MediaPipeGazeSource {
     if (!feature) return
 
     this.lastUsableResultAt = now
-    const point = projectFeature(feature, window.innerWidth, window.innerHeight)
+    const point =
+      this.mode === 'head'
+        ? projectHeadFeature(feature, window.innerWidth, window.innerHeight)
+        : projectFeature(feature, window.innerWidth, window.innerHeight)
 
     // Head pose straight from the descriptor, in the same shape the calibration
     // model stores for drift detection. `headScale` is inter-ocular distance in
@@ -260,11 +323,20 @@ export class MediaPipeGazeSource {
         : 0.3 + 0.7 * Math.max(0, sinceBlink / POST_BLINK_RECOVERY_MS)
     const openness = 1 - 0.85 * Math.max(0, Math.min(1, (closure - 0.2) / 0.35))
 
+    /*
+     * Eye closure says nothing about how well the head is being tracked, so in
+     * head mode confidence stays on the landmarks alone. Scoring it by openness
+     * would make the pointer "lose confidence" every time the player blinks,
+     * which the dwell would then read as an unusable frame.
+     */
+    const confidence =
+      this.mode === 'head' ? 0.9 : Math.max(0.05, Math.min(1, openness * recovery))
+
     this.cb.onFrame({
       point: {
         x: point.x,
         y: point.y,
-        confidence: Math.max(0.05, Math.min(1, openness * recovery)),
+        confidence,
       },
       head,
       eyeClosure: closure,
