@@ -47,6 +47,16 @@ export interface RegionDwellOptions {
    * cleanest re-arm is to restart the whole sampler.
    */
   resetKey?: string
+  /**
+   * Which sub-regions are worth descending into at all.
+   *
+   * Returning false makes a region inert: no frame, no dwell, no commit, as
+   * though the player had not looked at the board. Used to keep the descent out
+   * of parts of the board that hold nothing they could pick or play, so a
+   * three-look descent cannot be spent on the opponent's pieces or on squares
+   * the selected piece cannot legally reach. Omit it and every region is open.
+   */
+  isRegionAllowed?: (region: { row: number; col: number }) => boolean
   onCommit: (region: { row: number; col: number }) => void
 }
 
@@ -123,6 +133,7 @@ export function useGazeRegionDwell({
   divisions,
   dwellTime,
   resetKey = '',
+  isRegionAllowed,
   onCommit,
 }: RegionDwellOptions): RegionDwell {
   const [region, setRegion] = useState<{ row: number; col: number } | null>(null)
@@ -146,6 +157,8 @@ export function useGazeRegionDwell({
   dwellMsRef.current = dwellTime
   const divisionsRef = useRef(divisions)
   divisionsRef.current = divisions
+  const allowedRef = useRef(isRegionAllowed)
+  allowedRef.current = isRegionAllowed
 
   useEffect(() => {
     if (!enabled) {
@@ -266,6 +279,16 @@ export function useGazeRegionDwell({
         return
       }
       const stable: { row: number; col: number } = winner
+
+      // A region with nothing playable in it behaves as if the board were not
+      // being looked at: no frame is drawn and no dwell accumulates, so the
+      // descent simply cannot be spent there.
+      if (allowedRef.current && !allowedRef.current(stable)) {
+        target = null
+        setRegion(null)
+        setProgress(0)
+        return
+      }
 
       if (latched && (latched.row !== stable.row || latched.col !== stable.col)) latched = null
       if (!target || target.row !== stable.row || target.col !== stable.col) {

@@ -25,6 +25,9 @@ import {
 } from '@/lib/eye-tracking/useGazeRegionDwell'
 import { projectHeadFeature } from '@/lib/eye-tracking/mediapipe-source'
 import { GAZE_SOURCE_ORDER } from '@/lib/eye-tracking/types'
+import { createGame, getLegalMoves, getPieceAt } from '@/lib/chess/engine'
+import { toVisual } from '@/lib/chess/orientation'
+import type { PieceColor } from '@/lib/chess/types'
 
 const board = { left: 200, top: 100, width: 800, height: 800 }
 const squarePx = board.width / 8
@@ -433,6 +436,71 @@ const check = (name: string, ok: boolean, detail = '') => {
       new Set(GAZE_SOURCE_ORDER).size === 3 &&
       GAZE_SOURCE_ORDER.includes('headpointer'),
     GAZE_SOURCE_ORDER.join(' -> '))
+}
+
+// ------------------------------------- Descent is confined to playable ground
+{
+  /*
+   * The zoom must not narrow toward anything the player cannot act on. Landing
+   * a three-look descent on an opponent piece is three looks spent for nothing,
+   * and rejecting it only after the fact is what "I cannot select, I cannot
+   * move" feels like from the chair. Mirrors the containment test the game page
+   * applies to each quarter.
+   */
+  const game = createGame()
+  const HUMAN: PieceColor = 'white'
+  const N = 8
+
+  /** Drawn cells holding one of the player's own pieces, nothing picked yet. */
+  const ownCells: Array<{ row: number; col: number }> = []
+  for (let row = 0; row < N; row++) {
+    for (let col = 0; col < N; col++) {
+      const piece = getPieceAt(game.board, row, col)
+      if (piece?.color === HUMAN) ownCells.push(toVisual({ row, col }, 'white-bottom'))
+    }
+  }
+
+  const quarterAllowed = (
+    cells: Array<{ row: number; col: number }>,
+    region: { row: number; col: number; size: number },
+    picked: { row: number; col: number },
+  ) => {
+    const half = region.size / 2
+    const top = region.row + picked.row * half
+    const left = region.col + picked.col * half
+    return cells.some(
+      (c) => c.row >= top && c.row < top + half && c.col >= left && c.col < left + half,
+    )
+  }
+
+  const whole = { row: 0, col: 0, size: N }
+  const topLeft = quarterAllowed(ownCells, whole, { row: 0, col: 0 })
+  const topRight = quarterAllowed(ownCells, whole, { row: 0, col: 1 })
+  const botLeft = quarterAllowed(ownCells, whole, { row: 1, col: 0 })
+  const botRight = quarterAllowed(ownCells, whole, { row: 1, col: 1 })
+
+  check('at the start the descent refuses both halves holding only black',
+    !topLeft && !topRight,
+    `top-left ${topLeft}, top-right ${topRight}`)
+  check('and accepts the two holding white',
+    botLeft && botRight,
+    `bottom-left ${botLeft}, bottom-right ${botRight}`)
+  check('white has 16 pieces to aim at and no more', ownCells.length === 16,
+    `${ownCells.length} selectable cells`)
+
+  // With a piece picked, only its legal destinations (and itself) are open.
+  const e2 = { row: 6, col: 4 }
+  const moveCells = [
+    ...getLegalMoves(game, e2.row, e2.col).map((m) => toVisual(m, 'white-bottom')),
+    toVisual(e2, 'white-bottom'),
+  ]
+  check('a picked pawn opens only its own legal ground', moveCells.length === 3,
+    `${moveCells.length} cells: the pawn plus e3 and e4`)
+  const reachable = quarterAllowed(moveCells, whole, { row: 1, col: 1 })
+  const unreachable = quarterAllowed(moveCells, whole, { row: 0, col: 0 })
+  check('and keeps the descent out of the far side of the board',
+    reachable && !unreachable,
+    `near ${reachable}, far ${unreachable}`)
 }
 
 console.log(`\nADAPTATION ${ADAPTATION_TARGETS.length} + FIT ${CALIBRATION_TARGETS.length} + VALIDATION ${VALIDATION_TARGETS_ON_BOARD.length} = ${ADAPTATION_TARGETS.length + CALIBRATION_TARGETS.length + VALIDATION_TARGETS_ON_BOARD.length} dots`)

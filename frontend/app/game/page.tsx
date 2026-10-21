@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { motion } from 'framer-motion'
 import { ChevronLeft, ChevronRight, Maximize2, Minimize2, FlipVertical2, AlertCircle } from 'lucide-react'
 import Chessboard from '@/components/game/Chessboard'
@@ -22,14 +22,19 @@ import { DEFAULT_ACCESSIBILITY_SETTINGS } from '@/lib/eye-tracking/mock-data'
 import { GameState, BoardPosition, isGameOver } from '@/lib/chess/types'
 import { describeOutcome } from '@/lib/chess/outcome'
 import { AccessibilitySettings } from '@/lib/eye-tracking/types'
-import { makeMove, getPieceAt, pickFallbackMove } from '@/lib/chess/engine'
+import { makeMove, getPieceAt, getLegalMoves, pickFallbackMove } from '@/lib/chess/engine'
 import { getBestMove } from '@/lib/chess/stockfish-api'
 import { applyUciMove } from '@/lib/chess/apply-move'
 import { useGazeTracking } from '@/lib/eye-tracking/useGazeTracking'
 import { useGazeInteraction } from '@/lib/eye-tracking/useGazeInteraction'
 import { useGazeRegionDwell } from '@/lib/eye-tracking/useGazeRegionDwell'
 import { toAlgebraic, getBoardGeometry, invalidateBoardGeometry } from '@/lib/eye-tracking/board-mapping'
-import { DEFAULT_ORIENTATION, toLogical, type BoardOrientation } from '@/lib/chess/orientation'
+import {
+  DEFAULT_ORIENTATION,
+  toLogical,
+  toVisual,
+  type BoardOrientation,
+} from '@/lib/chess/orientation'
 import { GAZE_SOURCE_LABELS, GAZE_SOURCE_ORDER } from '@/lib/eye-tracking/types'
 
 /**
@@ -618,6 +623,58 @@ export default function GamePage() {
     return () => clearInterval(id)
   }, [gazeControlReady, isHumanTurn, showStruggleGuide])
 
+  /**
+   * Every square the player could usefully commit to right now, as *drawn* cell
+   * coordinates so it can be compared against the zoom grid directly.
+   *
+   * With nothing picked, that is their own pieces and nothing else: the
+   * opponent's men are not theirs to move, so a descent onto them is three
+   * looks thrown away. With a piece picked, it is that piece's legal
+   * destinations, plus the piece itself so it can be put back down.
+   */
+  const playableCells = useMemo(() => {
+    if (!isHumanTurn) return []
+    const cells: BoardPosition[] = []
+    const selected = gameState.selectedSquare
+    if (selected) {
+      for (const move of getLegalMoves(gameState, selected.row, selected.col)) {
+        cells.push(toVisual(move, orientation))
+      }
+      cells.push(toVisual(selected, orientation))
+      return cells
+    }
+    for (let row = 0; row < FULL_REGION; row++) {
+      for (let col = 0; col < FULL_REGION; col++) {
+        const piece = getPieceAt(gameState.board, row, col)
+        if (piece?.color === HUMAN_COLOR) cells.push(toVisual({ row, col }, orientation))
+      }
+    }
+    return cells
+  }, [gameState, isHumanTurn, orientation])
+
+  /**
+   * Whether a quarter of the current frame holds anything playable.
+   *
+   * Returning false keeps the zoom out of it entirely, so the board never
+   * narrows down toward the opponent's pieces or toward squares the selected
+   * piece cannot reach. If nothing at all is playable the gate opens rather
+   * than freezing the board, because a dead board is worse than a wasted look.
+   */
+  const isRegionAllowed = useCallback(
+    (picked: { row: number; col: number }) => {
+      if (!playableCells.length) return true
+      const current = zoomRegionRef.current ?? { row: 0, col: 0, size: FULL_REGION }
+      const half = current.size / COARSE_DIVISIONS
+      const top = current.row + picked.row * half
+      const left = current.col + picked.col * half
+      return playableCells.some(
+        (cell) =>
+          cell.row >= top && cell.row < top + half && cell.col >= left && cell.col < left + half,
+      )
+    },
+    [playableCells],
+  )
+
   /*
    * Two selection stages share one gaze stream, and exactly one of them is live
    * at a time. At the coarse stage the region dwell owns the gaze and the square
@@ -649,6 +706,7 @@ export default function GamePage() {
     resetKey: zoomRegion
       ? `${zoomRegion.row}-${zoomRegion.col}-${zoomRegion.size}`
       : 'full',
+    isRegionAllowed,
     onCommit: (picked) => {
       const current = zoomRegionRef.current ?? { row: 0, col: 0, size: FULL_REGION }
       const half = current.size / COARSE_DIVISIONS
