@@ -14,6 +14,14 @@ interface SquareProps {
   isLastMove: boolean
   isCheck: boolean
   isLegalMove: boolean
+  /**
+   * Holds one of the player's own pieces while nothing is picked yet, so it is
+   * a square worth aiming at. Only black pieces and empty squares are left
+   * unmarked, which is the point: a three-look descent onto one of those is
+   * three looks wasted, and the player should be able to see that before they
+   * start rather than after.
+   */
+  isSelectable?: boolean
   onClick: () => void
   /** 0..1 gaze-dwell progress toward activating this square, if any. */
   dwellProgress?: number
@@ -34,6 +42,7 @@ export default function Square({
   isLastMove,
   isCheck,
   isLegalMove,
+  isSelectable = false,
   onClick,
   dwellProgress = 0,
   dwellConfidence = 1,
@@ -59,6 +68,7 @@ export default function Square({
         border border-transparent
         ${isSelected ? 'border-2 border-primary ring-2 ring-primary/60 ring-inset' : ''}
         ${isLegalMove ? 'ring-2 ring-primary/40 ring-inset' : ''}
+        ${isSelectable ? 'ring-2 ring-[#7fd4ff]/55 ring-inset' : ''}
         cursor-pointer group
       `}
     >

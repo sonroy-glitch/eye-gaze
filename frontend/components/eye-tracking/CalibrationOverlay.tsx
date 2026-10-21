@@ -30,6 +30,13 @@ import type { GazePoint, HeadPose } from '@/lib/eye-tracking/types'
  * ~12s end to end instead of ~26s.
  */
 const SETTLE_MS = 220
+/**
+ * Head aiming needs longer before sampling starts. Moving the head to a dot is
+ * a physical arc that overshoots and settles, where an eye saccade is done in
+ * tens of milliseconds. Sampling through the settle captures the journey rather
+ * than the destination, which is what turned a good head calibration bad.
+ */
+const HEAD_SETTLE_MS = 420
 const SAMPLE_MS = 550
 /**
  * The adaptation phase is paced by WebEyeTrack, not by us: it drops any ground
@@ -462,7 +469,7 @@ export default function CalibrationOverlay({
         () => commit(MIN_SAMPLES_PER_TARGET),
         phase === 'adapting' ? ADAPT_SAMPLE_MS : SAMPLE_MS,
       )
-    }, SETTLE_MS)
+    }, headAimed ? HEAD_SETTLE_MS : SETTLE_MS)
 
     /**
      * Manual capture: a click (or Space) grabs the point being looked at now.
@@ -493,6 +500,7 @@ export default function CalibrationOverlay({
   }, [
     displayTarget,
     feedAdaptationPoint,
+    headAimed,
     index,
     phase,
     rawGazePointRef,
@@ -540,7 +548,7 @@ export default function CalibrationOverlay({
             </p>
             <p className="text-base text-[#e8eef7]">
               {headAimed
-                ? 'Turn your head to face each dot. Your nose is the pointer.'
+                ? 'Your nose is the pointer. Small movements, then hold still.'
                 : 'Head still. Move only your eyes.'}
             </p>
             <p className={`text-base ${hasSignal ? 'text-[#7fd4ff]' : 'text-[#ff9d42] font-bold'}`}>

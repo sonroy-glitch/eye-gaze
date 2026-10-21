@@ -90,6 +90,17 @@ const FULL_REGION = 8
  */
 const ZOOM_CANCEL_MS = 2200
 
+/**
+ * The player is White. Always, in every mode, by rule.
+ *
+ * Every selection path used to derive "my pieces" from whose turn it was
+ * (`whiteToMove ? 'white' : 'black'`), which is the same thing only for as long
+ * as nothing lets a turn slip. Stating it once as a constant means a black piece
+ * can never become selectable through any path: not a gaze descent, not a
+ * mouse click, not a state the engine left half-finished.
+ */
+const HUMAN_COLOR = 'white' as const
+
 /** Tries at the real engine before falling back to a local move. */
 const ENGINE_ATTEMPTS = 2
 /** Pause between those tries, long enough to ride out a cold start. */
@@ -469,7 +480,7 @@ export default function GamePage() {
       if (!current.whiteToMove || isGameOver(current.status)) return
 
       const piece = getPieceAt(current.board, pos.row, pos.col)
-      const myColor = current.whiteToMove ? 'white' : 'black'
+      const myColor = HUMAN_COLOR
 
       if (piece && piece.color === myColor) {
         /*
@@ -522,7 +533,7 @@ export default function GamePage() {
     setZoomRegion(null)
     setGameState((prev) => {
       const piece = getPieceAt(prev.board, pos.row, pos.col)
-      const myColor = prev.whiteToMove ? 'white' : 'black'
+      const myColor = HUMAN_COLOR
 
       if (prev.selectedSquare?.row === pos.row && prev.selectedSquare?.col === pos.col) {
         return { ...prev, selectedSquare: null }
@@ -719,7 +730,7 @@ export default function GamePage() {
       const clickedPiece = getPieceAt(prev.board, row, col)
 
       if (!selectedSquare) {
-        if (clickedPiece && clickedPiece.color === (prev.whiteToMove ? 'white' : 'black')) {
+        if (clickedPiece && clickedPiece.color === HUMAN_COLOR) {
           return { ...prev, selectedSquare: { row, col } }
         }
         return prev
@@ -729,7 +740,7 @@ export default function GamePage() {
         return { ...prev, selectedSquare: null }
       }
 
-      if (clickedPiece && clickedPiece.color === (prev.whiteToMove ? 'white' : 'black')) {
+      if (clickedPiece && clickedPiece.color === HUMAN_COLOR) {
         return { ...prev, selectedSquare: { row, col } }
       }
 

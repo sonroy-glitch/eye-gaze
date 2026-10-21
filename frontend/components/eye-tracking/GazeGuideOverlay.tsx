@@ -230,12 +230,12 @@ const HEAD_SETUP_STEPS = [
   {
     icon: Timer,
     title: 'You are aiming with your head, not your eyes',
-    copy: 'Point your nose at each dot and turn your head to reach it. Small movements are enough. Keeping your head still is the one thing that stops this working.',
+    copy: 'Your nose is the pointer. Small movements are enough to reach the whole board, and big swings of the head make it less accurate, not more.',
   },
   {
     icon: MousePointerClick,
-    title: 'Hold on each dot until it moves on',
-    copy: 'Each dot captures on its own in about a second. Aim, settle, and wait for it to pass to the next one.',
+    title: 'Settle on each dot before it captures',
+    copy: 'Aim, let your head come to rest, and hold. Each dot captures on its own in about a second. Stopping fully before it captures is what makes the calibration good.',
   },
 ]
 

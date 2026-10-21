@@ -91,6 +91,13 @@ const HEAD_TRANSLATION_GAIN = 2.2
 const HEAD_ROTATION_GAIN = 1.1
 
 /**
+ * Feature smoothing for head mode. Converges to ~95% in about 7 frames (230ms)
+ * rather than the ~25 frames (830ms) the iris setting takes, so a calibration
+ * dot is captured where the head actually came to rest.
+ */
+export const HEAD_SMOOTHING_ALPHA = 0.35
+
+/**
  * Uncalibrated screen projection for head pointing.
  *
  * This exists because eye gaze from a webcam tops out at roughly one to three
@@ -124,6 +131,18 @@ export class MediaPipeGazeSource {
   private rafId = 0
   private lastVideoTime = -1
 
+  /**
+   * Head mode gets a much lighter filter than gaze does.
+   *
+   * 0.12 is tuned for the iris, which jitters constantly from micro-saccades
+   * and landmark noise, and it takes roughly 830ms to converge after a step.
+   * The head moves in large deliberate arcs instead, so that lag is the
+   * dominant error: calibration settles for 220ms and then samples for 550ms,
+   * which with the heavy filter is entirely mid-transit, biasing every captured
+   * point back toward the previous dot. The head is also inherently steadier,
+   * so it does not need the smoothing in the first place, and the One Euro
+   * filter downstream still has the final say.
+   */
   private readonly smoother = new FeatureSmoother(0.12)
   private sensitivity: BlinkSensitivity = 'medium'
   private eyesClosed = false
@@ -155,6 +174,7 @@ export class MediaPipeGazeSource {
     this.video = video
     this.cb = callbacks
     this.mode = mode
+    if (mode === 'head') this.smoother.configure(HEAD_SMOOTHING_ALPHA)
   }
 
   setBlinkSensitivity(sensitivity: BlinkSensitivity): void {

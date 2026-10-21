@@ -65,6 +65,9 @@ interface ChessboardProps {
  */
 const MAX_BOARD_PX = 1400
 
+/** The player is White. Mirrors `HUMAN_COLOR` on the game page. */
+const HUMAN_PIECE_COLOR = 'white' as const
+
 /** Non-terminal statuses worth calling out under the board. */
 const CHECK_TEXT: Partial<Record<GameStatus, string>> = {
   white_check: 'White is in check',
@@ -214,6 +217,9 @@ export default function Chessboard({
                       isLastMove={isLastMove}
                       isCheck={isCheckSquare}
                       isLegalMove={isLegalMove}
+                      isSelectable={
+                        !gameState.selectedSquare && piece?.color === HUMAN_PIECE_COLOR
+                      }
                       onClick={() => onSquareClick(rowIndex, colIndex)}
                       dwellProgress={isDwelling ? dwellProgress : 0}
                       dwellConfidence={dwellConfidence}
