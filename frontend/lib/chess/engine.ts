@@ -152,6 +152,45 @@ export function isLegalMove(
   )
 }
 
+/** Rough piece values, only good enough to prefer the better capture. */
+const PIECE_VALUE: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 }
+
+/**
+ * A legal reply computed in the browser, for when the Stockfish endpoint cannot
+ * be reached.
+ *
+ * This exists because the alternative is a dead game. The engine runs in a route
+ * handler, and a single failed call used to leave the position on the opponent's
+ * turn forever: no retry, no message, and `isHumanTurn` false, which disables
+ * the gaze dwell entirely. The board stops answering the player's eyes even
+ * though the tracker is working perfectly, which is the single worst failure
+ * this app has, and it is invisible from the outside.
+ *
+ * It is deliberately weak and deliberately not a substitute for Stockfish. It
+ * prefers the most valuable capture and otherwise moves at random, which keeps a
+ * game going until the endpoint recovers.
+ */
+export function pickFallbackMove(gameState: GameState): string | null {
+  const chess = load(gameState.fen)
+  if (!chess) return null
+
+  const moves = chess.moves({ verbose: true })
+  if (!moves.length) return null
+
+  let best = moves[0]
+  let bestScore = -1
+  for (const move of moves) {
+    const score = move.captured ? (PIECE_VALUE[move.captured] ?? 0) : 0
+    // Random tiebreak so a fallback game is not the same game every time.
+    const jittered = score + Math.random() * 0.5
+    if (jittered > bestScore) {
+      bestScore = jittered
+      best = move
+    }
+  }
+  return `${best.from}${best.to}${best.promotion ?? ''}`
+}
+
 /**
  * Build the next state from a position that has just had a move applied.
  * `applied` is the chess.js move record for that move.

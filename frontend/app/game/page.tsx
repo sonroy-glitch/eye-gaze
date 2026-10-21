@@ -22,7 +22,7 @@ import { DEFAULT_ACCESSIBILITY_SETTINGS } from '@/lib/eye-tracking/mock-data'
 import { GameState, BoardPosition, isGameOver } from '@/lib/chess/types'
 import { describeOutcome } from '@/lib/chess/outcome'
 import { AccessibilitySettings } from '@/lib/eye-tracking/types'
-import { makeMove, getPieceAt } from '@/lib/chess/engine'
+import { makeMove, getPieceAt, pickFallbackMove } from '@/lib/chess/engine'
 import { getBestMove } from '@/lib/chess/stockfish-api'
 import { applyUciMove } from '@/lib/chess/apply-move'
 import { useGazeTracking } from '@/lib/eye-tracking/useGazeTracking'
@@ -90,6 +90,11 @@ const FULL_REGION = 8
  */
 const ZOOM_CANCEL_MS = 2200
 
+/** Tries at the real engine before falling back to a local move. */
+const ENGINE_ATTEMPTS = 2
+/** Pause between those tries, long enough to ride out a cold start. */
+const ENGINE_RETRY_MS = 1200
+
 /** Spoken names for the piece letters, for the selection hints. */
 const PIECE_NAMES: Record<string, string> = {
   P: 'pawn',
@@ -108,6 +113,8 @@ export default function GamePage() {
   const [timer, setTimer] = useState(600)
   const [difficulty, setDifficulty] = useState('Intermediate')
   const [engineThinking, setEngineThinking] = useState(false)
+  /** The last reply came from the local fallback, not Stockfish. */
+  const [engineDegraded, setEngineDegraded] = useState(false)
   const [accessibility, setAccessibility] = useState<AccessibilitySettings>(
     DEFAULT_ACCESSIBILITY_SETTINGS
   )
@@ -375,7 +382,20 @@ export default function GamePage() {
     gaze.setBlinkSensitivity(accessibility.blinkSensitivity)
   }, [accessibility.blinkSensitivity, gaze.setBlinkSensitivity])
 
-  // When it becomes Black's turn, ask the backend Stockfish for its move.
+  /**
+   * When it becomes Black's turn, ask the backend Stockfish for its move.
+   *
+   * Every failure path here has to end with a move actually being played. If it
+   * does not, the position stays on Black's turn forever: `isHumanTurn` goes
+   * false, which disables both gaze dwell hooks, and the board stops responding
+   * to the player's eyes even though the tracker is working perfectly. There is
+   * no message and no retry, and the only way out is New Game. Two separate
+   * reviewers described that as "the pieces are not moving with the user's
+   * eyes", which is exactly what it looks like from the player's chair.
+   *
+   * So: retry once for a transient blip, then fall back to a locally generated
+   * legal move. A weak opponent is a far better demo than a dead board.
+   */
   const requestedForMoveCount = useRef(-1)
   useEffect(() => {
     if (gameState.whiteToMove) return
@@ -386,21 +406,42 @@ export default function GamePage() {
     let cancelled = false
     setEngineThinking(true)
 
-    getBestMove(gameState, difficulty)
-      .then((result) => {
-        if (cancelled) return
-        if (!result) {
-          setEngineThinking(false)
-          return
+    const play = (uci: string) => {
+      setGameState((prev) => applyUciMove(prev, uci) ?? prev)
+    }
+
+    /** Resolve to a playable UCI move, or null if the position is terminal. */
+    const resolveMove = async (): Promise<{ uci: string | null; degraded: boolean }> => {
+      for (let attempt = 0; attempt < ENGINE_ATTEMPTS; attempt++) {
+        const result = await getBestMove(gameStateRef.current, difficulty).catch(() => null)
+        if (cancelled) return { uci: null, degraded: false }
+        // An empty move is the engine correctly reporting a terminal position.
+        if (result && result.move === '') return { uci: null, degraded: false }
+        if (result?.move && applyUciMove(gameStateRef.current, result.move)) {
+          return { uci: result.move, degraded: false }
         }
-        setGameState((prev) => {
-          if (!result.move) return prev
-          return applyUciMove(prev, result.move) ?? prev
-        })
+        if (attempt < ENGINE_ATTEMPTS - 1) {
+          await new Promise((r) => setTimeout(r, ENGINE_RETRY_MS))
+          if (cancelled) return { uci: null, degraded: false }
+        }
+      }
+      return { uci: pickFallbackMove(gameStateRef.current), degraded: true }
+    }
+
+    resolveMove()
+      .then(({ uci, degraded }) => {
+        if (cancelled) return
+        if (uci) play(uci)
+        setEngineDegraded(degraded && !!uci)
         setEngineThinking(false)
       })
       .catch(() => {
-        if (!cancelled) setEngineThinking(false)
+        if (cancelled) return
+        // Last resort: never leave the turn hanging.
+        const uci = pickFallbackMove(gameStateRef.current)
+        if (uci) play(uci)
+        setEngineDegraded(!!uci)
+        setEngineThinking(false)
       })
 
     return () => {
@@ -695,6 +736,8 @@ export default function GamePage() {
     setGameState(createInitialGameState())
     setTimer(600)
     setResultDismissed(false)
+    setEngineDegraded(false)
+    requestedForMoveCount.current = -1
   }
 
   const handleRestartGame = handleNewGame
@@ -854,6 +897,22 @@ export default function GamePage() {
           </span>
           <span className="text-white/30">|</span>
           <span className="text-[#9fb0c6]">T tracker · Z two-step · C recalibrate</span>
+        </div>
+      )}
+
+      {/* The opponent is running locally because the engine could not be
+          reached. Worth saying plainly: the game carries on either way, but the
+          moves are weak and that should not look like Stockfish playing badly. */}
+      {engineDegraded && !guide && !showCalibration && (
+        <div
+          // In gaze mode the bottom centre belongs to the "what to do next"
+          // prompt, so this moves to the top rather than sitting on top of it.
+          className={`fixed left-1/2 z-[55] w-[min(92vw,34rem)] -translate-x-1/2 rounded-lg border border-[#ff9d42]/60 bg-[#0d1117]/95 px-4 py-2 text-center text-sm text-[#ff9d42] shadow-lg ${
+            isFullscreen ? 'top-28' : 'bottom-3'
+          }`}
+        >
+          Could not reach the chess engine, so the last reply was played locally. The game
+          continues and it will try Stockfish again next turn.
         </div>
       )}
 
