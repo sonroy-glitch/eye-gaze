@@ -13,6 +13,7 @@ import type {
   HeadPose,
   TrackingStatus,
 } from './types'
+import { GAZE_SOURCE_ORDER } from './types'
 import {
   applyCalibrationModel,
   headDriftScore,
@@ -49,15 +50,28 @@ const SOURCE_FALLBACK_MS = 9000
 function loadPreferredSource(): GazeSourceKind {
   if (typeof window === 'undefined') return DEFAULT_GAZE_SOURCE
   const stored = window.localStorage.getItem(SOURCE_STORAGE_KEY)
-  return stored === 'webeyetrack' || stored === 'mediapipe' ? stored : DEFAULT_GAZE_SOURCE
+  // Validated against the real list rather than a hand-written pair, which is
+  // what silently discarded a switch to the head pointer on the next reload.
+  return GAZE_SOURCE_ORDER.includes(stored as GazeSourceKind)
+    ? (stored as GazeSourceKind)
+    : DEFAULT_GAZE_SOURCE
 }
 
 /**
- * The landmark pipeline is the default. It is the one whose every step can be
- * inspected, it self-hosts its model so it works with no network, and it cannot
- * degrade into a confident-looking constant the way an eye-patch CNN can.
+ * Head pointing is the default.
+ *
+ * Eye gaze from a webcam tops out around one to three squares of error, which
+ * is the whole reason the board has to be selected by halving quarters. Aiming
+ * with the head is a far better conditioned measurement: the landmarks give
+ * head position and rotation directly instead of inferring where the pupils
+ * point, and people aim their head much more precisely than any webcam can
+ * estimate their gaze. It runs on the same self-hosted landmark pipeline, so it
+ * still needs no network and still cannot degrade into a confident-looking
+ * constant the way an eye-patch CNN can.
+ *
+ * Both eye estimators remain one T press away for anyone who wants them.
  */
-export const DEFAULT_GAZE_SOURCE: GazeSourceKind = 'mediapipe'
+export const DEFAULT_GAZE_SOURCE: GazeSourceKind = 'headpointer'
 
 export interface UseGazeTracking {
   /** Attach to the hidden <video id="webcam"> WebEyeTrack drives. */
@@ -319,7 +333,17 @@ export function useGazeTracking(): UseGazeTracking {
          * has no business asserting, and it lets the UI say "press C" instead of
          * leaving the player to wonder why the board stopped listening.
          */
-        const drift = headDriftScore(model?.headPose ?? null, frame.head)
+        /*
+         * Head pointing inverts this entirely. There, moving the head IS the
+         * input, so every deliberate aim reads as maximum drift: the penalty
+         * bottoms out at 0.25, confidence lands near 0.10, and the region dwell
+         * discards every frame under MIN_FRAME_CONFIDENCE (0.15). The cursor
+         * still tracks perfectly, because it does not check confidence, so the
+         * board looks alive and simply never selects anything. Drift is only
+         * meaningful when the head is supposed to stay put.
+         */
+        const aimsWithHead = sourceKindRef.current === 'headpointer'
+        const drift = aimsWithHead ? null : headDriftScore(model?.headPose ?? null, frame.head)
         headDriftRef.current = drift
         const driftPenalty = drift === null ? 1 : Math.max(0.25, 1 - 0.75 * Math.min(1, drift))
 
@@ -451,8 +475,15 @@ export function useGazeTracking(): UseGazeTracking {
       const source = sourceRef.current
       if (!source) return
       if (source.msSinceLastUsableResult() < SOURCE_FALLBACK_MS) return
+      /*
+       * Fall back to a genuinely different pipeline. 'headpointer' and
+       * 'mediapipe' are the same FaceLandmarker underneath and differ only in
+       * which part of the face they read, so if one is producing nothing the
+       * other will produce nothing in exactly the same way. Only WebEyeTrack is
+       * a separate engine, and vice versa.
+       */
       void switchSource(
-        sourceKindRef.current === 'mediapipe' ? 'webeyetrack' : 'mediapipe',
+        sourceKindRef.current === 'webeyetrack' ? 'headpointer' : 'webeyetrack',
         true,
       )
     }, SOURCE_FALLBACK_MS)

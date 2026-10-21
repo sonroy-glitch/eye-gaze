@@ -585,7 +585,13 @@ export default function GamePage() {
   const [headMoved, setHeadMoved] = useState(false)
   useEffect(() => {
     const drift = gaze.headDrift
-    if (drift === null) return
+    // Null means drift is not a meaningful idea for this source (head pointing
+    // moves the head on purpose). Clear the flag rather than leaving a stale
+    // "you have moved" banner latched from a previous source.
+    if (drift === null) {
+      setHeadMoved(false)
+      return
+    }
     setHeadMoved((was) => (was ? drift > 0.6 : drift >= 1))
   }, [gaze.headDrift])
 

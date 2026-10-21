@@ -406,6 +406,28 @@ const check = (name: string, ok: boolean, detail = '') => {
   check('turning right moves the pointer right, lowering the chin moves it down',
     right > left && down > up)
 
+  /*
+   * Head pointing must survive the confidence chain, which is where it first
+   * failed in the real app: the cursor tracked perfectly and nothing ever
+   * selected. Head movement is the input here, so scoring it as drift away from
+   * the calibration pose bottomed the penalty out and pushed every frame under
+   * the dwell's MIN_FRAME_CONFIDENCE, which silently discards them.
+   */
+  const MIN_FRAME_CONFIDENCE = 0.15
+  const HEAD_FRAME_CONFIDENCE = 0.9
+  const WORST_QUALITY = 0.45
+
+  /** The chain from useGazeTracking: frame x calibration quality x drift. */
+  const effective = (driftPenalty: number) =>
+    HEAD_FRAME_CONFIDENCE * WORST_QUALITY * driftPenalty
+
+  check('head pointing clears the dwell confidence floor when drift is ignored',
+    effective(1) >= MIN_FRAME_CONFIDENCE,
+    `${effective(1).toFixed(3)} vs floor ${MIN_FRAME_CONFIDENCE}`)
+  check('and would have fallen under it if drift were still penalised',
+    effective(0.25) < MIN_FRAME_CONFIDENCE,
+    `${effective(0.25).toFixed(3)} with the drift penalty applied`)
+
   check('the T key cycle reaches every source and returns',
     GAZE_SOURCE_ORDER.length === 3 &&
       new Set(GAZE_SOURCE_ORDER).size === 3 &&
