@@ -212,6 +212,18 @@ export default function GamePage() {
   const isHumanTurn =
     gameState.whiteToMove && !engineThinking && !isGameOver(gameState.status)
 
+  /**
+   * Seconds left of the quiet window after the engine's reply.
+   *
+   * The board has just changed under the player: a piece they were not
+   * watching has moved, possibly taken one of theirs. They need to read the
+   * new position before the dwell starts counting, otherwise it accumulates on
+   * whatever square their gaze was resting on and picks something they never
+   * chose. Mouse play is untouched, and any click ends the window early.
+   */
+  const [graceLeft, setGraceLeft] = useState(0)
+  const previousTurnRef = useRef(gameState.whiteToMove)
+
   // The human is White, so the outcome is read from the human's point of view.
   const outcome = describeOutcome(gameState.status, gameState.whiteToMove, 'white')
 
@@ -643,7 +655,9 @@ export default function GamePage() {
   // while gaze is genuinely driving the board on the player's own turn, so
   // thinking time during the engine's reply, or a tab left open, never counts.
   useEffect(() => {
-    if (!gazeControlReady || !isHumanTurn) return
+    // Grace is not the player struggling, so it must not count toward the
+    // watchdog that re-shows the instructions.
+    if (!gazeControlReady || !isHumanTurn || inPostEngineGrace) return
     const id = setInterval(() => {
       idleSecondsRef.current += 1
       if (idleSecondsRef.current >= STRUGGLE_SECONDS) showStruggleGuide()
@@ -710,8 +724,32 @@ export default function GamePage() {
    * a region is chosen they swap. With coarse-to-fine off, the square dwell runs
    * the whole time exactly as before.
    */
-  const coarseStageActive = coarseToFine && gazeControlReady && isHumanTurn
-  const fineStageActive = gazeControlReady && isHumanTurn && !coarseToFine
+  /*
+   * Start the quiet window when the turn comes back to the player, and only
+   * then: the opening position needs no reading-in, and a turn that never left
+   * (an illegal attempt, a reselect) is not a board change.
+   */
+  useEffect(() => {
+    const wasEngineTurn = !previousTurnRef.current
+    previousTurnRef.current = gameState.whiteToMove
+    if (!wasEngineTurn || !gameState.whiteToMove) return
+    if (isGameOver(gameState.status)) return
+    setGraceLeft(accessibility.postEngineGraceSeconds)
+  }, [gameState.whiteToMove, gameState.status, accessibility.postEngineGraceSeconds])
+
+  // Tick it down once a second while it runs.
+  useEffect(() => {
+    if (graceLeft <= 0) return
+    const id = setTimeout(() => setGraceLeft((s) => Math.max(0, s - 1)), 1000)
+    return () => clearTimeout(id)
+  }, [graceLeft])
+
+  const inPostEngineGrace = graceLeft > 0
+
+  const coarseStageActive =
+    coarseToFine && gazeControlReady && isHumanTurn && !inPostEngineGrace
+  const fineStageActive =
+    gazeControlReady && isHumanTurn && !coarseToFine && !inPostEngineGrace
 
   /**
    * One dwell step of the zoom stack. The board frame always displays the
@@ -811,6 +849,9 @@ export default function GamePage() {
     if (!isHumanTurn) return
     // Reaching for the mouse is not being stuck, so it clears the watchdog.
     noteProgress()
+    // Someone acting with the mouse has plainly read the position already, so
+    // the quiet window has done its job and should not hold gaze back further.
+    setGraceLeft(0)
     setGameState((prev) => {
       const selectedSquare = prev.selectedSquare
       const clickedPiece = getPieceAt(prev.board, row, col)
@@ -848,6 +889,8 @@ export default function GamePage() {
     setTimer(600)
     setResultDismissed(false)
     setEngineDegraded(false)
+    setGraceLeft(0)
+    previousTurnRef.current = true
     requestedForMoveCount.current = -1
   }
 
@@ -982,12 +1025,16 @@ export default function GamePage() {
       {isFullscreen && !guide && !showCalibration && gazeControlReady && isHumanTurn && (
         <div className="pointer-events-none fixed bottom-6 left-1/2 z-[64] w-[min(60vw,32rem)] -translate-x-1/2 rounded-xl border-2 border-[#7fd4ff] bg-[#0d1117]/95 px-5 py-3 text-center shadow-lg">
           <p className="text-base text-[#9fb0c6]">
-            {gameState.selectedSquare
-              ? `Moving the ${PIECE_NAMES[getPieceAt(gameState.board, gameState.selectedSquare.row, gameState.selectedSquare.col)?.type ?? 'P']} on ${toAlgebraic(gameState.selectedSquare)}`
-              : 'Choosing a piece'}
+            {inPostEngineGrace
+              ? 'Your opponent has moved'
+              : gameState.selectedSquare
+                ? `Moving the ${PIECE_NAMES[getPieceAt(gameState.board, gameState.selectedSquare.row, gameState.selectedSquare.col)?.type ?? 'P']} on ${toAlgebraic(gameState.selectedSquare)}`
+                : 'Choosing a piece'}
           </p>
           <p className="text-xl font-bold text-[#7fd4ff]">
-            {regionWaitingForMove
+            {inPostEngineGrace
+              ? `Take a look. Your turn in ${graceLeft}…`
+              : regionWaitingForMove
               ? gaze.sourceKind === 'headpointer'
                 ? 'Aim at your next target'
                 : 'Look at your next target'

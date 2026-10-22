@@ -67,6 +67,16 @@ export interface AccessibilitySettings {
   /** Cursor smoothing/stability, 0 (responsive) .. 100 (very steady). */
   smoothing: number
   blinkSensitivity: 'low' | 'medium' | 'high'
+  /**
+   * Seconds of quiet after the engine replies, before gaze selection restarts.
+   *
+   * The board has just changed under the player: a piece they were not
+   * watching has moved, and they need to read the new position before choosing
+   * anything. Without this the dwell starts accumulating the instant the reply
+   * lands, on whatever square their gaze happens to be resting on, and picks
+   * something they never chose. 0 disables it.
+   */
+  postEngineGraceSeconds: number
   highContrast: boolean
   largeCursor: boolean
   reducedMotion: boolean

@@ -23,7 +23,9 @@ import {
   REARM_MOVE_FRACTION,
   REARM_TIMEOUT_MS,
 } from '@/lib/eye-tracking/useGazeRegionDwell'
-import { projectHeadFeature } from '@/lib/eye-tracking/mediapipe-source'
+import { projectHeadFeature, headSmoothingAlpha } from '@/lib/eye-tracking/mediapipe-source'
+/** Matches HEAD_TRANSLATION_GAIN; the speed metric is scaled by it. */
+const HEAD_TRANSLATION_GAIN_FOR_TEST = 2.2
 import { GAZE_SOURCE_ORDER } from '@/lib/eye-tracking/types'
 import { createGame, getLegalMoves, getPieceAt } from '@/lib/chess/engine'
 import { toVisual } from '@/lib/chess/orientation'
@@ -430,6 +432,61 @@ const check = (name: string, ok: boolean, detail = '') => {
   check('and would have fallen under it if drift were still penalised',
     effective(0.25) < MIN_FRAME_CONFIDENCE,
     `${effective(0.25).toFixed(3)} with the drift penalty applied`)
+
+  /*
+   * Adaptive head smoothing has to win on both counts at once, because the
+   * fixed value could only ever win on one: heavy smoothing made calibration
+   * sample mid-transit, light smoothing passed the head's tremor through and
+   * the pointer shook. Simulate both regimes against the old fixed 0.35.
+   */
+  const FIXED = 0.35
+  const TREMOR = 0.0015 // per-frame residual of a head held on a target
+
+  let rng = 777
+  const rand = () => ((rng = (rng * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) * 2 - 1
+
+  /** Residual noise on a held pose, as a fraction of the input tremor. */
+  const heldNoise = (adaptive: boolean) => {
+    let state = 0
+    let peak = 0
+    for (let i = 0; i < 400; i++) {
+      const sample = rand() * TREMOR
+      const speed = Math.abs(sample - state) * HEAD_TRANSLATION_GAIN_FOR_TEST
+      const alpha = adaptive ? headSmoothingAlpha(speed) : FIXED
+      state += alpha * (sample - state)
+      if (i > 50) peak = Math.max(peak, Math.abs(state))
+    }
+    return peak / TREMOR
+  }
+
+  /** Frames to reach 95% of a deliberate move. */
+  const settleFrames = (adaptive: boolean) => {
+    const targetValue = 0.1 // a real aiming movement
+    let state = 0
+    for (let i = 0; i < 200; i++) {
+      const speed = Math.abs(targetValue - state) * HEAD_TRANSLATION_GAIN_FOR_TEST
+      const alpha = adaptive ? headSmoothingAlpha(speed) : FIXED
+      state += alpha * (targetValue - state)
+      if (state >= targetValue * 0.95) return i + 1
+    }
+    return 200
+  }
+
+  const adaptiveNoise = heldNoise(true)
+  const fixedNoise = heldNoise(false)
+  const adaptiveSettle = settleFrames(true)
+  const fixedSettle = settleFrames(false)
+
+  check('a held head is smoothed harder than the fixed filter managed',
+    adaptiveNoise < fixedNoise,
+    `${(adaptiveNoise * 100).toFixed(0)}% of tremor vs ${(fixedNoise * 100).toFixed(0)}%`)
+  check('and a deliberate move still settles about as fast',
+    adaptiveSettle <= fixedSettle + 1,
+    `${adaptiveSettle} frames vs ${fixedSettle}`)
+  check('the filter opens up for movement and closes for stillness',
+    headSmoothingAlpha(0) < headSmoothingAlpha(0.02) &&
+      headSmoothingAlpha(0.02) <= headSmoothingAlpha(1),
+    `still ${headSmoothingAlpha(0).toFixed(2)}, moving ${headSmoothingAlpha(0.02).toFixed(2)}`)
 
   check('the T key cycle reaches every source and returns',
     GAZE_SOURCE_ORDER.length === 3 &&

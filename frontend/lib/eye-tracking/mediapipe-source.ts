@@ -91,11 +91,30 @@ const HEAD_TRANSLATION_GAIN = 2.2
 const HEAD_ROTATION_GAIN = 1.1
 
 /**
- * Feature smoothing for head mode. Converges to ~95% in about 7 frames (230ms)
- * rather than the ~25 frames (830ms) the iris setting takes, so a calibration
- * dot is captured where the head actually came to rest.
+ * Head smoothing adapts to how fast the head is moving, instead of being one
+ * compromise value.
+ *
+ * A single constant cannot serve both jobs here. Heavy smoothing (the 0.12 the
+ * iris uses) takes ~830ms to converge, so calibration samples land mid-transit
+ * and every captured dot is biased toward the previous one. Light smoothing
+ * fixes that and settles in ~230ms, but it passes the head's own tremor
+ * straight through, and the pointer visibly shakes while aiming. Trading one
+ * for the other is what made the pointer jittery.
+ *
+ * Speed tells the two apart. A head that is barely moving is being held on a
+ * target, and wants heavy smoothing. A head in motion is travelling to a new
+ * target, and wants a light filter so it arrives and settles quickly. This is
+ * the same idea as the One Euro filter already applied downstream, moved up to
+ * the feature so the calibration sampler benefits from it too.
  */
-export const HEAD_SMOOTHING_ALPHA = 0.35
+const HEAD_ALPHA_STILL = 0.10
+const HEAD_ALPHA_MOVING = 0.50
+/**
+ * Per-frame head movement, in the feature's own units, at which the filter is
+ * fully opened up. Deliberate aiming moves well past this; the residual tremor
+ * of a held pose sits an order of magnitude below it.
+ */
+const HEAD_SPEED_REFERENCE = 0.02
 
 /**
  * Uncalibrated screen projection for head pointing.
@@ -111,6 +130,25 @@ export const HEAD_SMOOTHING_ALPHA = 0.35
  * Signs follow the iris projection: +yaw and +headX are screen-right in the
  * mirrored view, +pitch and +headY are screen-down.
  */
+/**
+ * How fast the head is moving between two raw frames, combining translation and
+ * rotation the same way the projection does, so "fast" means the same thing to
+ * the filter as it does to the pointer on screen.
+ */
+export function headFeatureSpeed(previous: GazeFeature, current: GazeFeature): number {
+  const dx = current.headX - previous.headX
+  const dy = current.headY - previous.headY
+  const dyaw = current.yaw - previous.yaw
+  const dpitch = current.pitch - previous.pitch
+  return Math.hypot(dx, dy) * HEAD_TRANSLATION_GAIN + Math.hypot(dyaw, dpitch) * HEAD_ROTATION_GAIN
+}
+
+/** Smoothing factor for this frame: heavy when still, light when moving. */
+export function headSmoothingAlpha(speed: number): number {
+  const t = Math.max(0, Math.min(1, speed / HEAD_SPEED_REFERENCE))
+  return HEAD_ALPHA_STILL + (HEAD_ALPHA_MOVING - HEAD_ALPHA_STILL) * t
+}
+
 export function projectHeadFeature(
   feature: GazeFeature,
   width: number,
@@ -144,6 +182,8 @@ export class MediaPipeGazeSource {
    * filter downstream still has the final say.
    */
   private readonly smoother = new FeatureSmoother(0.12)
+  /** Last unsmoothed feature, for measuring head speed in head mode. */
+  private previousRaw: GazeFeature | null = null
   private sensitivity: BlinkSensitivity = 'medium'
   private eyesClosed = false
   private closedSince: number | null = null
@@ -174,7 +214,9 @@ export class MediaPipeGazeSource {
     this.video = video
     this.cb = callbacks
     this.mode = mode
-    if (mode === 'head') this.smoother.configure(HEAD_SMOOTHING_ALPHA)
+    // Head mode sets its alpha per frame from head speed; this is only the
+    // value used for the very first frame, before there is a speed to measure.
+    if (mode === 'head') this.smoother.configure(HEAD_ALPHA_MOVING)
   }
 
   setBlinkSensitivity(sensitivity: BlinkSensitivity): void {
@@ -319,6 +361,17 @@ export class MediaPipeGazeSource {
       this.trackingIssue = 'low-confidence'
       return
     }
+
+    // Head mode retunes the filter every frame from how fast the head is
+    // actually moving, so a held pose is smoothed hard and a travelling one
+    // barely at all. See the constants for why one fixed value cannot do both.
+    if (this.mode === 'head') {
+      if (this.previousRaw) {
+        this.smoother.configure(headSmoothingAlpha(headFeatureSpeed(this.previousRaw, raw)))
+      }
+      this.previousRaw = raw
+    }
+
     const feature = this.smoother.push(raw)
     if (!feature) return
 
@@ -389,6 +442,7 @@ export class MediaPipeGazeSource {
     this.lastResultAt = 0
     this.lastUsableResultAt = 0
     this.smoother.reset()
+    this.previousRaw = null
     this.eyesClosed = false
     this.closedSince = null
     this.trackingIssue = 'model-loading'

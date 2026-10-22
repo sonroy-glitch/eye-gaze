@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Volume2, Eye, Accessibility, Zap } from 'lucide-react'
+import { X, Volume2, Eye, Accessibility, Zap, Timer } from 'lucide-react'
 import { AccessibilitySettings } from '@/lib/eye-tracking/types'
 import { DEFAULT_ACCESSIBILITY_SETTINGS } from '@/lib/eye-tracking/mock-data'
 import { Button } from '@/components/ui/button'
@@ -24,6 +24,13 @@ export default function AccessibilityMenu({
     onSettingsChange({
       ...settings,
       dwellTime: parseInt(value),
+    })
+  }
+
+  const handleGraceChange = (value: string) => {
+    onSettingsChange({
+      ...settings,
+      postEngineGraceSeconds: parseInt(value),
     })
   }
 
@@ -115,6 +122,38 @@ export default function AccessibilityMenu({
                   <span>500ms</span>
                   <span className="font-mono">{settings.dwellTime}ms</span>
                   <span>1000ms</span>
+                </div>
+              </div>
+
+              {/* Pause after the opponent moves. Without it the dwell starts
+                  counting the instant the reply lands, on whatever square the
+                  gaze happened to be resting on. */}
+              <div className="space-y-3">
+                <label className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <Timer className="w-4 h-4" />
+                  Pause After Opponent Moves
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  Time to read the new position before eye control starts again. Set 0 to turn
+                  the pause off.
+                </p>
+                <input
+                  type="range"
+                  min="0"
+                  max="10"
+                  step="1"
+                  value={settings.postEngineGraceSeconds}
+                  onChange={(e) => handleGraceChange(e.target.value)}
+                  className="w-full"
+                />
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>Off</span>
+                  <span className="font-mono">
+                    {settings.postEngineGraceSeconds === 0
+                      ? 'Off'
+                      : `${settings.postEngineGraceSeconds}s`}
+                  </span>
+                  <span>10s</span>
                 </div>
               </div>
 

@@ -31,6 +31,9 @@ export const DEFAULT_ACCESSIBILITY_SETTINGS: AccessibilitySettings = {
   // webcam can lower it for snappier tracking.
   smoothing: 70,
   blinkSensitivity: 'medium',
+  // Long enough to read what the engine just played before the board starts
+  // responding again. Tunable 0..10s; 0 turns the pause off entirely.
+  postEngineGraceSeconds: 5,
   highContrast: false,
   largeCursor: false,
   reducedMotion: false,
