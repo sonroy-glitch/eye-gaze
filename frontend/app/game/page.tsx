@@ -106,6 +106,23 @@ const ZOOM_CANCEL_MS = 2200
  */
 const HUMAN_COLOR = 'white' as const
 
+/**
+ * Can this piece actually go anywhere this turn?
+ *
+ * A piece with no legal move must never become the selection. Picking one up
+ * used to leave it held with nothing highlighted and no way to put it down: the
+ * board offers no deselect gesture, and re-picking the same square just selects
+ * it again. Blocked rooks, bishops, the queen and the king are all in exactly
+ * this state at the start of a game, and a pinned piece can fall into it at any
+ * point, so it is reachable on the very first move.
+ *
+ * Refusing the pick-up is better than selecting and then dropping it: the
+ * player never enters the dead state, and the hint says which piece and why.
+ */
+function canMovePiece(state: GameState, pos: BoardPosition): boolean {
+  return getLegalMoves(state, pos.row, pos.col).length > 0
+}
+
 /** Tries at the real engine before falling back to a local move. */
 const ENGINE_ATTEMPTS = 2
 /** Pause between those tries, long enough to ride out a cold start. */
@@ -487,6 +504,13 @@ export default function GamePage() {
       const piece = getPieceAt(current.board, pos.row, pos.col)
       const myColor = HUMAN_COLOR
 
+      if (piece && piece.color === myColor && !canMovePiece(current, pos)) {
+        setHint(
+          `The ${PIECE_NAMES[piece.type]} on ${toAlgebraic(pos)} has no legal move right now. Pick a different piece.`,
+        )
+        return
+      }
+
       if (piece && piece.color === myColor) {
         /*
          * Landing on another of your own pieces used to switch the selection in
@@ -542,6 +566,10 @@ export default function GamePage() {
 
       if (prev.selectedSquare?.row === pos.row && prev.selectedSquare?.col === pos.col) {
         return { ...prev, selectedSquare: null }
+      }
+      // A piece that cannot move must not be picked up; see canMovePiece.
+      if (piece && piece.color === myColor && !canMovePiece(prev, pos)) {
+        return prev
       }
       if (piece && piece.color === myColor) {
         return { ...prev, selectedSquare: pos }
@@ -787,8 +815,12 @@ export default function GamePage() {
       const selectedSquare = prev.selectedSquare
       const clickedPiece = getPieceAt(prev.board, row, col)
 
+      // Same rule on the mouse: a piece with nowhere to go is not picked up.
+      const ownAndStuck =
+        clickedPiece?.color === HUMAN_COLOR && !canMovePiece(prev, { row, col })
+
       if (!selectedSquare) {
-        if (clickedPiece && clickedPiece.color === HUMAN_COLOR) {
+        if (clickedPiece && clickedPiece.color === HUMAN_COLOR && !ownAndStuck) {
           return { ...prev, selectedSquare: { row, col } }
         }
         return prev
@@ -799,7 +831,7 @@ export default function GamePage() {
       }
 
       if (clickedPiece && clickedPiece.color === HUMAN_COLOR) {
-        return { ...prev, selectedSquare: { row, col } }
+        return ownAndStuck ? prev : { ...prev, selectedSquare: { row, col } }
       }
 
       const newGameState = makeMove(prev, selectedSquare, { row, col })
